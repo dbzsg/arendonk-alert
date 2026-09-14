@@ -3,7 +3,7 @@ import re
 import json
 import time
 import hashlib
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 from xml.etree import ElementTree as ET
 
 import requests
@@ -26,6 +26,10 @@ HEADERS = {
         "Chrome/140.0 Safari/537.36"
     ),
     "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;"
+        "q=0.9,image/avif,image/webp,*/*;q=0.8"
+    ),
 }
 
 REQUEST_TIMEOUT = 20
@@ -40,8 +44,11 @@ session.headers.update(HEADERS)
 
 
 def get_page(url, attempts=2, timeout=REQUEST_TIMEOUT):
+
     for attempt in range(1, attempts + 1):
+
         try:
+
             response = session.get(
                 url,
                 timeout=timeout,
@@ -57,13 +64,14 @@ def get_page(url, attempts=2, timeout=REQUEST_TIMEOUT):
             )
 
         except requests.RequestException as error:
+
             print(
                 f"  Poging {attempt}/{attempts} mislukt: "
                 f"{type(error).__name__}: {error}"
             )
 
         if attempt < attempts:
-            time.sleep(2)
+            time.sleep(1.5)
 
     return None
 
@@ -73,32 +81,54 @@ def get_page(url, attempts=2, timeout=REQUEST_TIMEOUT):
 # ============================================================
 
 def clean_text(text):
+
     if not text:
         return ""
 
     text = re.sub(r"\s+", " ", text)
+
     return text.strip()
 
 
 def absolute_url(base_url, href):
+
     if not href:
         return None
 
-    return urljoin(base_url, href)
+    href = href.strip()
+
+    if href.startswith(
+        (
+            "javascript:",
+            "mailto:",
+            "tel:",
+            "#",
+        )
+    ):
+        return None
+
+    return urljoin(
+        base_url,
+        href,
+    )
 
 
 def normalize_url(url):
+
     if not url:
         return ""
 
     parsed = urlparse(url)
 
-    clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-
-    return clean.rstrip("/")
+    return (
+        f"{parsed.scheme}://"
+        f"{parsed.netloc}"
+        f"{parsed.path}"
+    ).rstrip("/")
 
 
 def normalize_for_compare(text):
+
     if not text:
         return ""
 
@@ -114,18 +144,97 @@ def normalize_for_compare(text):
         "ü": "u",
         "à": "a",
         "á": "a",
+        "â": "a",
+        "ç": "c",
     }
 
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        text,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
 
     return text.strip()
 
 
+def is_arendonk(text):
+
+    if not text:
+        return False
+
+    lower = text.lower()
+
+    return (
+        "arendonk" in lower
+        or re.search(
+            r"\b2370\b",
+            lower,
+        ) is not None
+    )
+
+
+def contains_unavailable_status(text):
+
+    if not text:
+        return False
+
+    lower = normalize_for_compare(text)
+
+    forbidden = [
+        "in optie",
+        "in option",
+        "verkocht",
+        "vendu",
+        "sold",
+        "verhuurd",
+        "loue",
+        "loué",
+        "gereserveerd",
+        "reserveerd",
+        "onder bod",
+        "offre en cours",
+    ]
+
+    for phrase in forbidden:
+
+        if phrase in lower:
+            return True
+
+    return False
+
+
+def is_for_sale(text):
+
+    if not text:
+        return False
+
+    lower = normalize_for_compare(text)
+
+    positive = [
+        "te koop",
+        "a vendre",
+        "for sale",
+    ]
+
+    for phrase in positive:
+
+        if phrase in lower:
+            return True
+
+    return False
+
+
 def extract_price(text):
+
     if not text:
         return None
 
@@ -136,14 +245,26 @@ def extract_price(text):
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
 
         if match:
-            number = re.sub(r"[^\d]", "", match.group(1))
+
+            number = re.sub(
+                r"[^\d]",
+                "",
+                match.group(1),
+            )
 
             if number:
+
                 try:
                     return int(number)
+
                 except ValueError:
                     pass
 
@@ -151,16 +272,24 @@ def extract_price(text):
 
 
 def extract_area(text, keywords):
+
     if not text:
         return None
 
     lower = text.lower()
 
     for keyword in keywords:
-        position = lower.find(keyword.lower())
+
+        position = lower.find(
+            keyword.lower()
+        )
 
         if position >= 0:
-            section = text[position:position + 180]
+
+            section = text[
+                position:
+                position + 250
+            ]
 
             match = re.search(
                 r"([\d\.,]+)\s*(?:m²|m2)",
@@ -169,6 +298,7 @@ def extract_area(text, keywords):
             )
 
             if match:
+
                 value = (
                     match.group(1)
                     .replace(".", "")
@@ -177,6 +307,7 @@ def extract_area(text, keywords):
 
                 try:
                     return float(value)
+
                 except ValueError:
                     pass
 
@@ -184,15 +315,20 @@ def extract_area(text, keywords):
 
 
 def extract_bedrooms(text):
+
     if not text:
         return None
 
     patterns = [
-        r"(\d+)\s*(?:slaapkamers?|slaapkamer)",
-        r"(?:slaapkamers?|slaapkamer)\s*:?\s*(\d+)",
+        r"(\d+)\s*slaapkamers?",
+        r"slaapkamers?\s*:?\s*(\d+)",
+        r"(\d+)\s*chambres?",
+        r"chambres?\s*:?\s*(\d+)",
+        r"(\d+)\s*bedrooms?",
     ]
 
     for pattern in patterns:
+
         match = re.search(
             pattern,
             text,
@@ -200,8 +336,12 @@ def extract_bedrooms(text):
         )
 
         if match:
+
             try:
-                return int(match.group(1))
+                return int(
+                    match.group(1)
+                )
+
             except ValueError:
                 pass
 
@@ -209,15 +349,21 @@ def extract_bedrooms(text):
 
 
 def extract_address(text):
+
     if not text:
         return ""
 
     patterns = [
-        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ'’\-\s]{2,50}\s+\d+[A-Za-z]?)\s*,?\s*2370\s+Arendonk",
-        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ'’\-\s]{2,50}\s+\d+[A-Za-z]?)\s+2370\s+Arendonk",
+
+        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ'’\-\s]{2,60}\s+\d+[A-Za-z]?)\s*,?\s*2370\s+Arendonk",
+
+        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ'’\-\s]{2,60}\s+\d+[A-Za-z]?)\s+2370\s+Arendonk",
+
+        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ'’\-\s]{2,60}\s+\d+[A-Za-z]?)\s*,?\s*Arendonk",
     ]
 
     for pattern in patterns:
+
         match = re.search(
             pattern,
             text,
@@ -225,86 +371,387 @@ def extract_address(text):
         )
 
         if match:
-            return clean_text(match.group(1))
+
+            return clean_text(
+                match.group(1)
+            )
 
     return ""
 
 
-def contains_unavailable_status(text):
-    """
-    Sluit advertenties uit die niet meer normaal te koop zijn.
-    """
+def extract_reference(text):
 
     if not text:
-        return False
+        return ""
 
-    lower = normalize_for_compare(text)
-
-    forbidden_phrases = [
-        "in optie",
-        "in option",
-        "optie",
-        "option",
-        "verkocht",
-        "vendu",
-        "sold",
-        "verhuurd",
-        "loué",
-        "gereserveerd",
-        "reserveerd",
-        "onder bod",
-        "offre en cours",
+    patterns = [
+        r"Ref\.?\s*:?\s*([A-Za-z0-9\-/]+)",
+        r"referentie\s*:?\s*([A-Za-z0-9\-/]+)",
+        r"référence\s*:?\s*([A-Za-z0-9\-/]+)",
     ]
 
-    for phrase in forbidden_phrases:
-        if phrase in lower:
-            return True
+    for pattern in patterns:
 
-    return False
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
+
+        if match:
+            return match.group(1)
+
+    return ""
 
 
-def make_property_id(source, url):
-    normalized = normalize_url(url)
+def make_property_id(
+    source,
+    url,
+):
 
-    raw = f"{source}|{normalized}"
+    raw = (
+        f"{source}|"
+        f"{normalize_url(url)}"
+    )
 
     return hashlib.sha256(
         raw.encode("utf-8")
     ).hexdigest()[:24]
 
 
-def make_cross_source_key(property_data):
-    """
-    Voorzichtige deduplicatie.
+def make_cross_source_key(
+    property_data
+):
 
-    Een adres alleen is niet genoeg: appartementen op hetzelfde
-    adres kunnen verschillende panden zijn.
+    address = property_data.get(
+        "address",
+        "",
+    )
 
-    Daarom combineren we adres + prijs + woonoppervlakte.
-    """
+    price = property_data.get(
+        "price"
+    )
 
-    address = property_data.get("address", "")
+    living_area = property_data.get(
+        "living_area"
+    )
 
     if not address:
         return ""
 
-    address_normalized = normalize_for_compare(address)
-
-    if len(address_normalized) < 5:
+    if not price:
         return ""
 
-    price = property_data.get("price")
-    living_area = property_data.get("living_area")
-
-    if not price or not living_area:
+    if not living_area:
         return ""
+
+    address = normalize_for_compare(
+        address
+    )
 
     return (
-        f"{address_normalized}|"
+        f"{address}|"
         f"{price}|"
         f"{round(float(living_area))}"
     )
 
+
+def extract_property_type(text):
+
+    if not text:
+        return ""
+
+    lower = text.lower()
+
+    types = [
+        ("bouwgrond", "Bouwgrond"),
+        ("grond", "Grond"),
+        ("villa", "Villa"),
+        ("appartement", "Appartement"),
+        ("penthouse", "Penthouse"),
+        ("duplex", "Duplex"),
+        ("woning", "Woning"),
+        ("huis", "Huis"),
+        ("studio", "Studio"),
+        ("handelspand", "Handelspand"),
+        ("commercieel", "Commercieel"),
+        ("kantoor", "Kantoor"),
+        ("garage", "Garage"),
+        ("magazijn", "Magazijn"),
+        ("industrie", "Industrieel"),
+        ("opbrengsteigendom", "Opbrengsteigendom"),
+        ("gebouw voor gemengd gebruik", "Gemengd gebruik"),
+    ]
+
+    for needle, label in types:
+
+        if needle in lower:
+            return label
+
+    return ""
+
+
+# ============================================================
+# URL DETECTIE
+# ============================================================
+
+def unique_urls_from_html(
+    html,
+    base_url,
+    pattern,
+):
+
+    if not html:
+        return []
+
+    found = set()
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
+    # --------------------------------------------------------
+    # 1. Normale href's
+    # --------------------------------------------------------
+
+    for link in soup.find_all(
+        "a",
+        href=True,
+    ):
+
+        full_url = absolute_url(
+            base_url,
+            link.get("href"),
+        )
+
+        if not full_url:
+            continue
+
+        if re.search(
+            pattern,
+            full_url,
+            re.IGNORECASE,
+        ):
+
+            found.add(
+                normalize_url(
+                    full_url
+                )
+            )
+
+    # --------------------------------------------------------
+    # 2. URLs rechtstreeks uit HTML
+    #
+    # Dit is belangrijk voor websites waarbij
+    # advertenties via JavaScript/data-attributen
+    # worden opgebouwd.
+    # --------------------------------------------------------
+
+    raw_patterns = [
+        r'https?://[^"\'<>\s]+',
+        r'["\'](/[^"\']+)["\']',
+    ]
+
+    for raw_pattern in raw_patterns:
+
+        for match in re.finditer(
+            raw_pattern,
+            html,
+            re.IGNORECASE,
+        ):
+
+            candidate = match.group(0)
+
+            candidate = (
+                candidate
+                .strip(
+                    "\"'<>"
+                )
+            )
+
+            full_url = absolute_url(
+                base_url,
+                candidate,
+            )
+
+            if not full_url:
+                continue
+
+            if re.search(
+                pattern,
+                full_url,
+                re.IGNORECASE,
+            ):
+
+                found.add(
+                    normalize_url(
+                        full_url
+                    )
+                )
+
+    return sorted(
+        found
+    )
+
+
+def discover_detail_urls_from_page(
+    response,
+    base_url,
+    detail_pattern,
+    exclude_patterns=None,
+):
+
+    if not response:
+        return []
+
+    if exclude_patterns is None:
+        exclude_patterns = []
+
+    urls = unique_urls_from_html(
+        response.text,
+        base_url,
+        detail_pattern,
+    )
+
+    result = []
+
+    for url in urls:
+
+        lower = url.lower()
+
+        excluded = False
+
+        for pattern in exclude_patterns:
+
+            if re.search(
+                pattern,
+                lower,
+            ):
+                excluded = True
+                break
+
+        if excluded:
+            continue
+
+        result.append(
+            url
+        )
+
+    return result
+
+
+# ============================================================
+# DETAILPAGINA UITLEZEN
+# ============================================================
+
+def parse_detail_page(
+    source,
+    url,
+    title_hint="",
+    timeout=20,
+):
+
+    response = get_page(
+        url,
+        attempts=1,
+        timeout=timeout,
+    )
+
+    if not response:
+        return None
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser",
+    )
+
+    # Scripts/styles verwijderen
+    for tag in soup(
+        [
+            "script",
+            "style",
+            "noscript",
+            "svg",
+        ]
+    ):
+        tag.decompose()
+
+    text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+    )
+
+    if not text:
+        return None
+
+    # Moet effectief Arendonk zijn.
+    if not is_arendonk(text):
+        return None
+
+    # Geen verhuuradvertentie.
+    if "/te-huur/" in url.lower():
+        return None
+
+    if "te huur" in normalize_for_compare(
+        text[:5000]
+    ) and "te koop" not in normalize_for_compare(
+        text[:5000]
+    ):
+        return None
+
+    # Verkocht / optie / verhuurd uitsluiten.
+    if contains_unavailable_status(
+        text
+    ):
+        return None
+
+    # Bij detailpagina's willen we effectief
+    # een verkoopadvertentie zien.
+    if not is_for_sale(text):
+        return None
+
+    title = title_hint
+
+    if not title:
+
+        h1 = soup.find("h1")
+
+        if h1:
+            title = clean_text(
+                h1.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+    if not title and soup.title:
+
+        title = clean_text(
+            soup.title.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+    property_data = create_property(
+        source=source,
+        url=url,
+        title=title,
+        text=text,
+        property_type=extract_property_type(
+            text
+        ),
+    )
+
+    return property_data
+
+
+# ============================================================
+# PROPERTY AANMAKEN
+# ============================================================
 
 def create_property(
     source,
@@ -313,220 +760,204 @@ def create_property(
     text,
     property_type=None,
 ):
+
     url = normalize_url(url)
 
-    title = clean_text(title)
-    text = clean_text(text)
+    title = clean_text(
+        title
+    )
+
+    text = clean_text(
+        text
+    )
 
     if not title:
-        title = property_type or "Vastgoed te koop"
-
-    price = extract_price(text)
-    bedrooms = extract_bedrooms(text)
-
-    living_area = extract_area(
-        text,
-        [
-            "bewoonbare oppervlakte",
-            "bewoonbare opp",
-            "woonoppervlakte",
-            "woonopp",
-            "leefruimte",
-        ],
-    )
-
-    ground_area = extract_area(
-        text,
-        [
-            "oppervlakte grond",
-            "grondoppervlakte",
-            "perceeloppervlakte",
-            "perceel",
-        ],
-    )
-
-    address = extract_address(text)
+        title = (
+            property_type
+            or "Vastgoed te koop"
+        )
 
     property_data = {
+
         "id": make_property_id(
             source,
             url,
         ),
+
         "source": source,
+
         "url": url,
+
         "title": title,
+
         "type": property_type or "",
-        "address": address,
-        "price": price,
-        "bedrooms": bedrooms,
-        "living_area": living_area,
-        "ground_area": ground_area,
-        "text": text,
+
+        "address": extract_address(
+            text
+        ),
+
+        "price": extract_price(
+            text
+        ),
+
+        "bedrooms": extract_bedrooms(
+            text
+        ),
+
+        "living_area": extract_area(
+            text,
+            [
+                "bewoonbare oppervlakte",
+                "bewoonbare opp",
+                "woonoppervlakte",
+                "woonopp",
+                "leefruimte",
+                "bewoonbare oppervlakte",
+            ],
+        ),
+
+        "ground_area": extract_area(
+            text,
+            [
+                "grondoppervlakte",
+                "oppervlakte grond",
+                "perceeloppervlakte",
+                "perceelopp",
+                "perceel",
+            ],
+        ),
+
+        "reference": extract_reference(
+            text
+        ),
+
+        "text": text[:5000],
     }
 
-    property_data["cross_source_key"] = (
-        make_cross_source_key(property_data)
+    property_data[
+        "cross_source_key"
+    ] = make_cross_source_key(
+        property_data
     )
 
     return property_data
 
 
 # ============================================================
-# ADVERTENTIEKAART TEKST
-# ============================================================
-
-def get_card_text(link, max_parents=8):
-    """
-    Zoekt de tekst van de advertentiekaart rond een link.
-    """
-
-    node = link
-    best_text = ""
-
-    for _ in range(max_parents):
-
-        if node is None:
-            break
-
-        text = clean_text(
-            node.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        if text:
-
-            if (
-                len(text) > len(best_text)
-                and len(text) <= 3000
-            ):
-                best_text = text
-
-            if (
-                "2370" in text
-                and "arendonk" in text.lower()
-            ):
-                return text
-
-        node = node.parent
-
-    return best_text
-
-
-def is_arendonk(text):
-    if not text:
-        return False
-
-    lower = text.lower()
-
-    return (
-        "arendonk" in lower
-        or "2370" in lower
-    )
-
-
-# ============================================================
 # IMMO DRIE
 # ============================================================
 
-def is_immo_drie_detail_url(url):
-    """
-    Alleen echte detailpagina's.
-
-    Belangrijk:
-    /nl/te-koop/woningen
-    /nl/te-koop/appartementen
-    /nl/te-koop/pagina-2
-
-    zijn GEEN advertenties.
-    """
+def is_immo_drie_detail_url(
+    url
+):
 
     if not url:
         return False
 
-    parsed = urlparse(url)
-    path = parsed.path.lower().rstrip("/")
+    path = urlparse(
+        url
+    ).path.lower()
 
-    if not path.startswith("/nl/te-koop/"):
-        return False
+    # Voorbeeld:
+    # /nl/huis-te-koop-in-arendonk/7791969
+    #
+    # Belangrijk:
+    # /nl/te-koop/woningen
+    # mag NOOIT als advertentie gelden.
 
-    blocked_exact = [
-        "/nl/te-koop/woningen",
-        "/nl/te-koop/appartementen",
-        "/nl/te-koop/gronden",
-        "/nl/te-koop/kantoren",
-        "/nl/te-koop/commercieel",
-        "/nl/te-koop/garages",
-        "/nl/te-koop/opbrengsteigendom",
-    ]
-
-    if path in blocked_exact:
-        return False
-
-    if re.search(
-        r"/nl/te-koop/pagina-\d+$",
+    if not re.search(
+        r"/\d+$",
         path,
     ):
         return False
 
-    # Categorie-/overzichtspagina's
-    blocked_parts = [
-        "woningen",
-        "appartementen",
-        "gronden",
-        "kantoren",
-        "garages",
-        "commercieel",
-        "opbrengsteigendom",
-    ]
-
-    last_part = path.split("/")[-1]
-
-    if last_part in blocked_parts:
+    if "/te-koop/" in path:
         return False
 
-    # Echte Immo Drie detailpagina's bevatten doorgaans
-    # meerdere URL-segmenten.
-    segments = [
-        part for part in path.split("/")
-        if part
-    ]
+    if "/te-huur/" in path:
+        return False
 
-    if len(segments) < 4:
+    if "/nl/" not in path:
         return False
 
     return True
 
 
 def scan_immo_drie():
-    print("Immo Drie controleren...")
 
-    base = "https://www.immodrie.be"
+    print(
+        "\nImmo Drie controleren..."
+    )
 
-    properties = []
-    seen_urls = set()
+    base = (
+        "https://www.immodrie.be"
+    )
 
-    for page in range(1, 21):
+    seed_urls = [
+        f"{base}/nl/te-koop",
+        f"{base}/nl/te-koop/woningen",
+        f"{base}/nl/te-koop/appartementen",
+        f"{base}/nl/te-koop/gronden",
+        f"{base}/nl/te-koop/commercieel",
+        f"{base}/nl/te-koop/kantoren",
+        f"{base}/nl/te-koop/garages",
+        f"{base}/nl/te-koop/opbrengsteigendom",
+    ]
 
-        if page == 1:
-            url = f"{base}/nl/te-koop"
-        else:
-            url = (
-                f"{base}/nl/te-koop"
-                f"?page={page}"
-            )
+    detail_urls = set()
+
+    # --------------------------------------------------------
+    # Eerst de normale overzichtspagina's.
+    # --------------------------------------------------------
+
+    for seed_url in seed_urls:
 
         response = get_page(
-            url,
+            seed_url,
             attempts=1,
             timeout=15,
         )
 
         if not response:
-            print(
-                f"Pagina {page}: niet bereikbaar."
-            )
+            continue
+
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/nl/[^\"'<>\s]+/\d+$",
+            exclude_patterns=[
+                r"/te-koop/",
+                r"/te-huur/",
+            ],
+        )
+
+        for url in found:
+
+            if is_immo_drie_detail_url(
+                url
+            ):
+                detail_urls.add(
+                    url
+                )
+
+    # --------------------------------------------------------
+    # De huidige site gebruikt meerdere pagina's.
+    #
+    # We zoeken niet blind 20 pagina's af.
+    # We volgen de gevonden paginering uit de HTML.
+    # --------------------------------------------------------
+
+    pagination_urls = set()
+
+    for seed_url in seed_urls:
+
+        response = get_page(
+            seed_url,
+            attempts=1,
+            timeout=15,
+        )
+
+        if not response:
             continue
 
         soup = BeautifulSoup(
@@ -534,72 +965,121 @@ def scan_immo_drie():
             "html.parser",
         )
 
-        page_count = 0
-
         for link in soup.find_all(
             "a",
             href=True,
         ):
 
+            href = link.get(
+                "href"
+            )
+
             full_url = absolute_url(
                 base,
-                link.get("href"),
+                href,
             )
 
             if not full_url:
                 continue
 
-            full_url = normalize_url(full_url)
+            lower = full_url.lower()
 
-            if not is_immo_drie_detail_url(
-                full_url
+            if "/nl/te-koop" not in lower:
+                continue
+
+            if (
+                "page="
+                in lower
+                or "pagina"
+                in lower
             ):
-                continue
 
-            if full_url in seen_urls:
-                continue
-
-            card_text = get_card_text(link)
-
-            link_text = clean_text(
-                link.get_text(
-                    " ",
-                    strip=True,
+                pagination_urls.add(
+                    normalize_url(
+                        full_url
+                    )
                 )
-            )
 
-            combined = clean_text(
-                f"{link_text} {card_text}"
-            )
+    # Maximaal 30 extra overzichtspagina's.
+    # Zo kan een tijdelijke vreemde link nooit
+    # een eindeloze scan veroorzaken.
 
-            if not is_arendonk(combined):
-                continue
+    for page_url in sorted(
+        pagination_urls
+    )[:30]:
 
-            if contains_unavailable_status(
-                combined
+        response = get_page(
+            page_url,
+            attempts=1,
+            timeout=15,
+        )
+
+        if not response:
+            continue
+
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/nl/[^\"'<>\s]+/\d+$",
+            exclude_patterns=[
+                r"/te-koop/",
+                r"/te-huur/",
+            ],
+        )
+
+        for url in found:
+
+            if is_immo_drie_detail_url(
+                url
             ):
-                continue
-
-            seen_urls.add(full_url)
-
-            properties.append(
-                create_property(
-                    source="Immo Drie",
-                    url=full_url,
-                    title=link_text,
-                    text=combined,
+                detail_urls.add(
+                    url
                 )
-            )
 
-            page_count += 1
+    print(
+        f"  {len(detail_urls)} "
+        f"mogelijke detailpagina's gevonden."
+    )
+
+    properties = []
+
+    for index, url in enumerate(
+        sorted(detail_urls),
+        start=1,
+    ):
+
+        property_data = parse_detail_page(
+            source="Immo Drie",
+            url=url,
+        )
+
+        if not property_data:
+            continue
+
+        properties.append(
+            property_data
+        )
 
         print(
-            f"Pagina {page}: {page_count}"
+            f"  {index}/{len(detail_urls)}: "
+            f"{property_data.get('title', '')[:70]}"
         )
+
+    # Exacte URL-dubbels verwijderen.
+    unique = {}
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
 
     print(
         f"TOTAAL Immo Drie: "
-        f"{len(properties)} unieke advertenties."
+        f"{len(properties)} "
+        f"unieke advertenties."
     )
 
     return properties
@@ -609,13 +1089,17 @@ def scan_immo_drie():
 # DOMESTIC
 # ============================================================
 
-def is_domestic_detail_url(url):
+def is_domestic_detail_url(
+    url
+):
+
     if not url:
         return False
 
-    path = urlparse(url).path.lower()
+    path = urlparse(
+        url
+    ).path.lower()
 
-    # Domestic detailpagina's eindigen op een numeriek ID.
     return bool(
         re.search(
             r"/\d+$",
@@ -625,11 +1109,16 @@ def is_domestic_detail_url(url):
 
 
 def scan_domestic():
-    print("\nDomestic controleren...")
 
-    base = "https://www.domestic.be"
+    print(
+        "\nDomestic controleren..."
+    )
 
-    overview_urls = [
+    base = (
+        "https://www.domestic.be"
+    )
+
+    seed_urls = [
         f"{base}/nl/te-koop/arendonk-2370",
         f"{base}/nl/te-koop/woningen/arendonk-2370",
         f"{base}/nl/te-koop/appartementen/arendonk-2370",
@@ -639,99 +1128,78 @@ def scan_domestic():
         f"{base}/nl/te-koop/industrieel/arendonk-2370",
     ]
 
-    properties = []
-    seen_urls = set()
+    detail_urls = set()
 
-    for url in overview_urls:
+    for seed_url in seed_urls:
 
         response = get_page(
-            url,
+            seed_url,
             attempts=1,
             timeout=20,
         )
 
         if not response:
-            print(
-                f"  Domestic pagina niet bereikbaar: "
-                f"{url}"
-            )
             continue
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/nl/[^\"'<>\s]+/\d+$",
         )
 
-        page_count = 0
+        for url in found:
 
-        for link in soup.find_all(
-            "a",
-            href=True,
-        ):
-
-            full_url = absolute_url(
-                base,
-                link.get("href"),
-            )
-
-            if not full_url:
-                continue
-
-            full_url = normalize_url(full_url)
-
-            if not is_domestic_detail_url(
-                full_url
+            if is_domestic_detail_url(
+                url
             ):
-                continue
-
-            if full_url in seen_urls:
-                continue
-
-            card_text = get_card_text(
-                link,
-                max_parents=8,
-            )
-
-            link_text = clean_text(
-                link.get_text(
-                    " ",
-                    strip=True,
+                detail_urls.add(
+                    url
                 )
-            )
 
-            combined = clean_text(
-                f"{link_text} {card_text}"
-            )
+    print(
+        f"  {len(detail_urls)} "
+        f"mogelijke detailpagina's gevonden."
+    )
 
-            if not is_arendonk(combined):
-                continue
+    properties = []
 
-            if contains_unavailable_status(
-                combined
-            ):
-                continue
+    for index, url in enumerate(
+        sorted(detail_urls),
+        start=1,
+    ):
 
-            seen_urls.add(full_url)
+        property_data = parse_detail_page(
+            source="Domestic",
+            url=url,
+        )
 
-            properties.append(
-                create_property(
-                    source="Domestic",
-                    url=full_url,
-                    title=link_text,
-                    text=combined,
-                )
-            )
+        if not property_data:
+            continue
 
-            page_count += 1
+        properties.append(
+            property_data
+        )
 
         print(
-            f"  {page_count} advertenties gevonden "
-            f"op {url}"
+            f"  {index}/{len(detail_urls)}: "
+            f"{property_data.get('title', '')[:70]}"
         )
+
+    unique = {}
+
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
 
     print(
         f"TOTAAL Domestic: "
-        f"{len(properties)} unieke advertenties."
+        f"{len(properties)} "
+        f"unieke advertenties."
     )
 
     return properties
@@ -741,13 +1209,17 @@ def scan_domestic():
 # HEYLEN VASTGOED
 # ============================================================
 
-def is_heylen_detail_url(url):
+def is_heylen_detail_url(
+    url
+):
+
     if not url:
         return False
 
-    path = urlparse(url).path.lower()
+    path = urlparse(
+        url
+    ).path.lower()
 
-    # Detailpagina's hebben /kopen/.../<nummer>
     return bool(
         re.search(
             r"/kopen/[^/]+/\d+$",
@@ -757,90 +1229,91 @@ def is_heylen_detail_url(url):
 
 
 def scan_heylen():
-    print("\nHeylen Vastgoed controleren...")
 
-    base = "https://www.heylenvastgoed.be"
+    print(
+        "\nHeylen Vastgoed controleren..."
+    )
 
-    url = f"{base}/kopen/arendonk"
+    base = (
+        "https://www.heylenvastgoed.be"
+    )
 
-    response = get_page(url)
+    seed_urls = [
+        f"{base}/kopen/arendonk",
+    ]
 
-    if not response:
-        print(
-            "  Heylen Vastgoed is momenteel "
-            "niet bereikbaar."
+    detail_urls = set()
+
+    for seed_url in seed_urls:
+
+        response = get_page(
+            seed_url,
+            attempts=2,
+            timeout=20,
         )
-        return []
 
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser",
+        if not response:
+            continue
+
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/kopen/[^\"'<>\s]+/\d+$",
+        )
+
+        for url in found:
+
+            if is_heylen_detail_url(
+                url
+            ):
+                detail_urls.add(
+                    url
+                )
+
+    print(
+        f"  {len(detail_urls)} "
+        f"mogelijke detailpagina's gevonden."
     )
 
     properties = []
-    seen_urls = set()
 
-    for link in soup.find_all(
-        "a",
-        href=True,
+    for index, url in enumerate(
+        sorted(detail_urls),
+        start=1,
     ):
 
-        full_url = absolute_url(
-            base,
-            link.get("href"),
+        property_data = parse_detail_page(
+            source="Heylen Vastgoed",
+            url=url,
         )
 
-        if not full_url:
+        if not property_data:
             continue
-
-        full_url = normalize_url(full_url)
-
-        if not is_heylen_detail_url(
-            full_url
-        ):
-            continue
-
-        if full_url in seen_urls:
-            continue
-
-        card_text = get_card_text(
-            link,
-            max_parents=9,
-        )
-
-        link_text = clean_text(
-            link.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        combined = clean_text(
-            f"{link_text} {card_text}"
-        )
-
-        if not is_arendonk(combined):
-            continue
-
-        if contains_unavailable_status(
-            combined
-        ):
-            continue
-
-        seen_urls.add(full_url)
 
         properties.append(
-            create_property(
-                source="Heylen Vastgoed",
-                url=full_url,
-                title=link_text,
-                text=combined,
-            )
+            property_data
         )
 
+        print(
+            f"  {index}/{len(detail_urls)}: "
+            f"{property_data.get('title', '')[:70]}"
+        )
+
+    unique = {}
+
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
+
     print(
-        f"  {len(properties)} "
-        f"vastgoedadvertenties gevonden."
+        f"TOTAAL Heylen Vastgoed: "
+        f"{len(properties)} "
+        f"unieke advertenties."
     )
 
     return properties
@@ -850,11 +1323,16 @@ def scan_heylen():
 # HILLEWAERE
 # ============================================================
 
-def is_hillewaere_detail_url(url):
+def is_hillewaere_detail_url(
+    url
+):
+
     if not url:
         return False
 
-    path = urlparse(url).path.lower()
+    path = urlparse(
+        url
+    ).path.lower()
 
     return bool(
         re.search(
@@ -865,25 +1343,70 @@ def is_hillewaere_detail_url(url):
 
 
 def scan_hillewaere():
-    print("\nHillewaere controleren...")
 
-    base = "https://www.hillewaere-vastgoed.be"
+    print(
+        "\nHillewaere controleren..."
+    )
 
-    properties = []
-    seen_urls = set()
+    base = (
+        "https://www.hillewaere-vastgoed.be"
+    )
 
-    for page in range(1, 31):
+    seed_urls = [
+        f"{base}/vastgoed/alle/te-koop",
+        f"{base}/vastgoed/alle/te-koop?view=list",
+        f"{base}/vastgoed/alle/te-koop?page=1&view=list",
+    ]
 
-        if page == 1:
-            url = (
-                f"{base}/vastgoed/alle/te-koop"
-                f"?view=list"
-            )
-        else:
-            url = (
-                f"{base}/vastgoed/alle/te-koop"
-                f"?page={page}&view=list"
-            )
+    detail_urls = set()
+
+    # --------------------------------------------------------
+    # Eerst seedpagina's.
+    # --------------------------------------------------------
+
+    for seed_url in seed_urls:
+
+        response = get_page(
+            seed_url,
+            attempts=1,
+            timeout=20,
+        )
+
+        if not response:
+            continue
+
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/vastgoed/\d+[^\"'<>\s]*",
+        )
+
+        for url in found:
+
+            if is_hillewaere_detail_url(
+                url
+            ):
+                detail_urls.add(
+                    url
+                )
+
+    # --------------------------------------------------------
+    # Omdat Hillewaere de resultaten over
+    # verschillende pagina's verdeelt, scannen we
+    # maximaal 30 pagina's.
+    #
+    # Dit is bewust alleen voor Hillewaere.
+    # --------------------------------------------------------
+
+    for page in range(
+        1,
+        31,
+    ):
+
+        url = (
+            f"{base}/vastgoed/alle/te-koop"
+            f"?page={page}&view=list"
+        )
 
         response = get_page(
             url,
@@ -894,83 +1417,81 @@ def scan_hillewaere():
         if not response:
             continue
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=r"/vastgoed/\d+[^\"'<>\s]*",
         )
 
-        page_count = 0
+        before = len(
+            detail_urls
+        )
 
-        for link in soup.find_all(
-            "a",
-            href=True,
-        ):
+        for candidate in found:
 
-            full_url = absolute_url(
-                base,
-                link.get("href"),
-            )
-
-            if not full_url:
-                continue
-
-            full_url = normalize_url(full_url)
-
-            if not is_hillewaere_detail_url(
-                full_url
+            if is_hillewaere_detail_url(
+                candidate
             ):
-                continue
-
-            if full_url in seen_urls:
-                continue
-
-            card_text = get_card_text(
-                link,
-                max_parents=10,
-            )
-
-            link_text = clean_text(
-                link.get_text(
-                    " ",
-                    strip=True,
+                detail_urls.add(
+                    candidate
                 )
-            )
 
-            combined = clean_text(
-                f"{link_text} {card_text}"
-            )
+        added = (
+            len(detail_urls)
+            - before
+        )
 
-            if not is_arendonk(combined):
-                continue
+        if added:
 
-            if contains_unavailable_status(
-                combined
-            ):
-                continue
-
-            seen_urls.add(full_url)
-
-            properties.append(
-                create_property(
-                    source="Hillewaere",
-                    url=full_url,
-                    title=link_text,
-                    text=combined,
-                )
-            )
-
-            page_count += 1
-
-        if page_count:
             print(
                 f"  Pagina {page}: "
-                f"{page_count} Arendonk-advertentie(s)"
+                f"{added} nieuwe detailpagina(s)"
             )
 
     print(
-        f"  TOTAAL Hillewaere: "
+        f"  {len(detail_urls)} "
+        f"mogelijke detailpagina's gevonden."
+    )
+
+    properties = []
+
+    for index, url in enumerate(
+        sorted(detail_urls),
+        start=1,
+    ):
+
+        property_data = parse_detail_page(
+            source="Hillewaere",
+            url=url,
+        )
+
+        if not property_data:
+            continue
+
+        properties.append(
+            property_data
+        )
+
+        print(
+            f"  {index}/{len(detail_urls)}: "
+            f"{property_data.get('title', '')[:80]}"
+        )
+
+    unique = {}
+
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
+
+    print(
+        f"TOTAAL Hillewaere: "
         f"{len(properties)} "
-        f"vastgoedadvertenties gevonden."
+        f"unieke advertenties."
     )
 
     return properties
@@ -981,11 +1502,12 @@ def scan_hillewaere():
 # ============================================================
 
 def get_sitemap_urls():
+
+    sitemap_urls = []
+
     robots_url = (
         "https://www.century21.be/robots.txt"
     )
-
-    sitemap_urls = []
 
     response = get_page(
         robots_url,
@@ -994,11 +1516,13 @@ def get_sitemap_urls():
     )
 
     if response:
+
         for line in response.text.splitlines():
 
             if line.lower().startswith(
                 "sitemap:"
             ):
+
                 sitemap = line.split(
                     ":",
                     1,
@@ -1009,7 +1533,6 @@ def get_sitemap_urls():
                         sitemap
                     )
 
-    # Fallbacks
     sitemap_urls.extend(
         [
             "https://www.century21.be/sitemap.xml",
@@ -1017,13 +1540,11 @@ def get_sitemap_urls():
         ]
     )
 
-    result = []
-
-    for url in sitemap_urls:
-        if url not in result:
-            result.append(url)
-
-    return result
+    return list(
+        dict.fromkeys(
+            sitemap_urls
+        )
+    )
 
 
 def parse_sitemap(
@@ -1031,6 +1552,7 @@ def parse_sitemap(
     visited=None,
     depth=0,
 ):
+
     if visited is None:
         visited = set()
 
@@ -1040,7 +1562,9 @@ def parse_sitemap(
     if sitemap_url in visited:
         return []
 
-    visited.add(sitemap_url)
+    visited.add(
+        sitemap_url
+    )
 
     response = get_page(
         sitemap_url,
@@ -1052,15 +1576,21 @@ def parse_sitemap(
         return []
 
     try:
+
         root = ET.fromstring(
             response.text
         )
+
     except ET.ParseError:
+
         return []
 
     namespace = ""
 
-    if root.tag.startswith("{"):
+    if root.tag.startswith(
+        "{"
+    ):
+
         namespace = (
             root.tag.split(
                 "}",
@@ -1087,6 +1617,7 @@ def parse_sitemap(
                 loc is not None
                 and loc.text
             ):
+
                 urls.extend(
                     parse_sitemap(
                         loc.text.strip(),
@@ -1095,7 +1626,9 @@ def parse_sitemap(
                     )
                 )
 
-    elif root.tag.endswith("urlset"):
+    elif root.tag.endswith(
+        "urlset"
+    ):
 
         for item in root.findall(
             f"{namespace}url"
@@ -1109,6 +1642,7 @@ def parse_sitemap(
                 loc is not None
                 and loc.text
             ):
+
                 urls.append(
                     loc.text.strip()
                 )
@@ -1116,7 +1650,10 @@ def parse_sitemap(
     return urls
 
 
-def is_century21_detail_url(url):
+def is_century21_detail_url(
+    url
+):
+
     if not url:
         return False
 
@@ -1133,13 +1670,22 @@ def is_century21_detail_url(url):
 
 
 def scan_century21():
-    print("\nCentury 21 controleren...")
 
-    sitemap_urls = get_sitemap_urls()
+    print(
+        "\nCentury 21 controleren..."
+    )
 
-    all_urls = []
+    base = (
+        "https://www.century21.be"
+    )
 
-    for sitemap_url in sitemap_urls:
+    candidates = set()
+
+    # --------------------------------------------------------
+    # Sitemap.
+    # --------------------------------------------------------
+
+    for sitemap_url in get_sitemap_urls():
 
         urls = parse_sitemap(
             sitemap_url
@@ -1147,102 +1693,98 @@ def scan_century21():
 
         for url in urls:
 
-            if url not in all_urls:
-                all_urls.append(url)
+            if is_century21_detail_url(
+                url
+            ):
+                candidates.add(
+                    normalize_url(
+                        url
+                    )
+                )
 
-    candidate_urls = []
+    # --------------------------------------------------------
+    # Officiële algemene koopsite als extra
+    # bron voor links.
+    # --------------------------------------------------------
 
-    for url in all_urls:
+    overview_urls = [
+        f"{base}/nl/te-koop",
+    ]
 
-        if is_century21_detail_url(
-            url
-        ):
-            candidate_urls.append(url)
-
-    candidate_urls = list(
-        dict.fromkeys(candidate_urls)
-    )
-
-    print(
-        f"  {len(candidate_urls)} "
-        f"mogelijke Arendonk-pandpagina's "
-        f"gevonden."
-    )
-
-    properties = []
-
-    for index, url in enumerate(
-        candidate_urls,
-        start=1,
-    ):
+    for overview_url in overview_urls:
 
         response = get_page(
-            url,
+            overview_url,
             attempts=1,
-            timeout=15,
+            timeout=20,
         )
 
         if not response:
             continue
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
+        found = discover_detail_urls_from_page(
+            response=response,
+            base_url=base,
+            detail_pattern=(
+                r"/nl/pand/te-koop/"
+                r"[^\"'<>\s]+/arendonk/"
+                r"[^\"'<>\s]+"
+            ),
         )
 
-        text = clean_text(
-            soup.get_text(
-                " ",
-                strip=True,
-            )
-        )
+        for url in found:
 
-        if not is_arendonk(text):
-            continue
-
-        if "te koop" not in text.lower():
-            continue
-
-        if contains_unavailable_status(
-            text
-        ):
-            continue
-
-        title = ""
-
-        h1 = soup.find("h1")
-
-        if h1:
-            title = clean_text(
-                h1.get_text(
-                    " ",
-                    strip=True,
+            if is_century21_detail_url(
+                url
+            ):
+                candidates.add(
+                    url
                 )
-            )
 
-        if not title and soup.title:
-            title = clean_text(
-                soup.title.get_text()
-            )
+    print(
+        f"  {len(candidates)} "
+        f"mogelijke Arendonk-pandpagina's gevonden."
+    )
+
+    properties = []
+
+    for index, url in enumerate(
+        sorted(candidates),
+        start=1,
+    ):
+
+        property_data = parse_detail_page(
+            source="Century 21",
+            url=url,
+        )
+
+        if not property_data:
+            continue
 
         properties.append(
-            create_property(
-                source="Century 21",
-                url=url,
-                title=title,
-                text=text,
-            )
+            property_data
         )
 
         print(
-            f"  {index}/{len(candidate_urls)}: "
-            f"{title[:80]}"
+            f"  {index}/{len(candidates)}: "
+            f"{property_data.get('title', '')[:80]}"
         )
 
+    unique = {}
+
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
+
     print(
-        f"  TOTAAL Century 21: "
+        f"TOTAAL Century 21: "
         f"{len(properties)} "
-        f"vastgoedadvertenties gevonden."
+        f"unieke advertenties."
     )
 
     return properties
@@ -1252,39 +1794,45 @@ def scan_century21():
 # DEWAELE
 # ============================================================
 
-def is_dewaele_detail_url(url):
+def is_dewaele_detail_url(
+    url
+):
+
     if not url:
         return False
 
-    path = urlparse(url).path.lower()
+    path = urlparse(
+        url
+    ).path.lower()
 
-    # Filterpagina's mogen nooit als advertentie worden gezien.
-    blocked = [
-        "/te-koop/2370-arendonk",
-        "/te-koop/2370-arendonk/",
-    ]
+    # We sluiten de algemene Arendonk-
+    # filterpagina's uit.
+    if (
+        "/te-koop/2370-arendonk"
+        in path
+    ):
+        return False
 
-    for blocked_path in blocked:
-        if path.rstrip("/") == blocked_path.rstrip("/"):
-            return False
+    # Dewaele detailpagina's kunnen verschillende
+    # slugs gebruiken. We accepteren alleen links
+    # die niet naar algemene filters leiden.
+    if "/te-koop/" not in path:
+        return False
 
-    # Alleen links die duidelijk een pand voorstellen.
-    # Dewaele detailpagina's bevatten meestal een numerieke
-    # vastgoed-ID.
-    return bool(
-        re.search(
-            r"/\d{5,}",
-            path,
-        )
-    )
+    return True
 
 
 def scan_dewaele():
-    print("\nDewaele controleren...")
 
-    base = "https://www.dewaele.com"
+    print(
+        "\nDewaele controleren..."
+    )
 
-    urls = [
+    base = (
+        "https://www.dewaele.com"
+    )
+
+    seed_urls = [
         f"{base}/nl/te-koop/2370-arendonk",
         f"{base}/nl/te-koop/2370-arendonk/huis",
         f"{base}/nl/te-koop/2370-arendonk/appartement",
@@ -1295,13 +1843,12 @@ def scan_dewaele():
         f"{base}/nl/te-koop/2370-arendonk/garage",
     ]
 
-    properties = []
-    seen_urls = set()
+    detail_urls = set()
 
-    for url in urls:
+    for seed_url in seed_urls:
 
         response = get_page(
-            url,
+            seed_url,
             attempts=1,
             timeout=15,
         )
@@ -1314,6 +1861,9 @@ def scan_dewaele():
             "html.parser",
         )
 
+        # Dewaele is gevoeliger voor foutieve
+        # links, daarom verzamelen we eerst alleen
+        # echte href's.
         for link in soup.find_all(
             "a",
             href=True,
@@ -1327,56 +1877,80 @@ def scan_dewaele():
             if not full_url:
                 continue
 
-            full_url = normalize_url(
+            path = urlparse(
                 full_url
-            )
+            ).path.lower()
 
             if not is_dewaele_detail_url(
                 full_url
             ):
                 continue
 
-            if full_url in seen_urls:
+            # Alleen links die duidelijk niet
+            # naar een filterpagina gaan.
+            if path.rstrip("/") in [
+                "/nl/te-koop",
+                "/nl/te-koop/2370-arendonk",
+                "/nl/te-koop/2370-arendonk/huis",
+                "/nl/te-koop/2370-arendonk/appartement",
+                "/nl/te-koop/2370-arendonk/grond",
+                "/nl/te-koop/2370-arendonk/handelspand",
+                "/nl/te-koop/2370-arendonk/industrie",
+                "/nl/te-koop/2370-arendonk/kantoor",
+                "/nl/te-koop/2370-arendonk/garage",
+            ]:
                 continue
 
-            card_text = get_card_text(
-                link,
-                max_parents=10,
-            )
-
-            link_text = clean_text(
-                link.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-
-            combined = clean_text(
-                f"{link_text} {card_text}"
-            )
-
-            if not is_arendonk(combined):
-                continue
-
-            if contains_unavailable_status(
-                combined
-            ):
-                continue
-
-            seen_urls.add(full_url)
-
-            properties.append(
-                create_property(
-                    source="Dewaele",
-                    url=full_url,
-                    title=link_text,
-                    text=combined,
+            detail_urls.add(
+                normalize_url(
+                    full_url
                 )
             )
 
     print(
-        f"  {len(properties)} "
-        f"vastgoedadvertenties gevonden."
+        f"  {len(detail_urls)} "
+        f"mogelijke detailpagina's gevonden."
+    )
+
+    properties = []
+
+    for index, url in enumerate(
+        sorted(detail_urls),
+        start=1,
+    ):
+
+        property_data = parse_detail_page(
+            source="Dewaele",
+            url=url,
+        )
+
+        if not property_data:
+            continue
+
+        properties.append(
+            property_data
+        )
+
+        print(
+            f"  {index}/{len(detail_urls)}: "
+            f"{property_data.get('title', '')[:80]}"
+        )
+
+    unique = {}
+
+    for property_data in properties:
+        unique[
+            property_data["url"]
+        ] = property_data
+
+    properties = list(
+        unique.values()
+    )
+
+    print(
+        f"TOTAAL Dewaele: "
+        f"{len(properties)} "
+        f"unieke advertenties."
     )
 
     return properties
@@ -1391,25 +1965,29 @@ def load_database():
     if not os.path.exists(
         DATABASE_FILE
     ):
+
         return {
             "seen": [],
             "initialized_sources": [],
         }
 
     try:
+
         with open(
             DATABASE_FILE,
             "r",
             encoding="utf-8",
         ) as file:
 
-            data = json.load(file)
+            data = json.load(
+                file
+            )
 
     except Exception as error:
 
         print(
-            f"Database kon niet gelezen worden: "
-            f"{error}"
+            f"Database kon niet gelezen "
+            f"worden: {error}"
         )
 
         return {
@@ -1417,15 +1995,21 @@ def load_database():
             "initialized_sources": [],
         }
 
-    # Oude databasevorm
-    if isinstance(data, list):
+    # Oude versie was een simpele lijst.
+    if isinstance(
+        data,
+        list,
+    ):
 
         return {
             "seen": data,
             "initialized_sources": [],
         }
 
-    if isinstance(data, dict):
+    if isinstance(
+        data,
+        dict,
+    ):
 
         return {
             "seen": data.get(
@@ -1444,7 +2028,9 @@ def load_database():
     }
 
 
-def save_database(database):
+def save_database(
+    database
+):
 
     with open(
         DATABASE_FILE,
@@ -1464,15 +2050,19 @@ def save_database(database):
 # TELEGRAM
 # ============================================================
 
-def send_telegram(property_data):
+def send_telegram(
+    property_data
+):
 
     if (
         not TELEGRAM_BOT_TOKEN
         or not TELEGRAM_CHAT_ID
     ):
+
         print(
             "Telegram instellingen ontbreken."
         )
+
         return False
 
     source = property_data.get(
@@ -1514,9 +2104,16 @@ def send_telegram(property_data):
         "type"
     )
 
+    reference = property_data.get(
+        "reference"
+    )
+
     message_parts = [
+
         "🏠 <b>NIEUW VASTGOED IN ARENDONK</b>",
+
         "",
+
         f"<b>{title}</b>",
     ]
 
@@ -1559,6 +2156,12 @@ def send_telegram(property_data):
 
         message_parts.append(
             f"🌳 Perceel: {ground_area:g} m²"
+        )
+
+    if reference:
+
+        message_parts.append(
+            f"🔖 Ref.: {reference}"
         )
 
     message_parts.extend(
@@ -1617,8 +2220,8 @@ def send_telegram(property_data):
     except requests.RequestException as error:
 
         print(
-            f"  Telegram verbinding mislukt: "
-            f"{error}"
+            f"  Telegram verbinding "
+            f"mislukt: {error}"
         )
 
     return False
@@ -1632,6 +2235,7 @@ def process_properties(
     properties,
     database,
 ):
+
     seen = set(
         database.get(
             "seen",
@@ -1665,10 +2269,16 @@ def process_properties(
         current_ids_by_source.setdefault(
             source,
             set(),
-        ).add(property_id)
+        ).add(
+            property_id
+        )
 
     # --------------------------------------------------------
-    # Eerste scan van een bron
+    # Nieuwe bron?
+    #
+    # Bestaande advertenties van een nieuwe bron
+    # worden niet allemaal tegelijk naar Telegram
+    # gestuurd.
     # --------------------------------------------------------
 
     for source, ids in (
@@ -1682,7 +2292,10 @@ def process_properties(
             )
 
             for property_id in ids:
-                seen.add(property_id)
+
+                seen.add(
+                    property_id
+                )
 
             initialized_sources.add(
                 source
@@ -1695,16 +2308,13 @@ def process_properties(
             )
 
     # --------------------------------------------------------
-    # Bekende cross-source advertenties
+    # Cross-source duplicaten
+    #
+    # Als exact hetzelfde pand bij twee makelaars
+    # staat, proberen we maar één melding te sturen.
     # --------------------------------------------------------
 
-    known_cross_source_keys = set()
-
-    # We kennen de volledige historische
-    # advertentiegegevens niet meer uit de oude
-    # database, dus cross-source deduplicatie
-    # gebeurt vooral binnen de huidige scan.
-    current_cross_source_keys = {}
+    groups = {}
 
     for property_data in properties:
 
@@ -1713,18 +2323,68 @@ def process_properties(
             "",
         )
 
-        if not key:
+        if key:
+
+            groups.setdefault(
+                key,
+                [],
+            ).append(
+                property_data
+            )
+
+    duplicate_ids = set()
+
+    # Vaste voorkeursvolgorde.
+    source_priority = {
+        "Immo Drie": 1,
+        "Domestic": 2,
+        "Heylen Vastgoed": 3,
+        "Hillewaere": 4,
+        "Century 21": 5,
+        "Dewaele": 6,
+    }
+
+    for key, group in groups.items():
+
+        if len(group) <= 1:
             continue
 
-        current_cross_source_keys.setdefault(
-            key,
-            [],
-        ).append(
-            property_data
+        group = sorted(
+            group,
+            key=lambda item:
+                source_priority.get(
+                    item.get("source"),
+                    99,
+                ),
         )
 
+        winner = group[0]
+
+        for property_data in group[1:]:
+
+            if (
+                property_data["id"]
+                != winner["id"]
+            ):
+
+                duplicate_ids.add(
+                    property_data["id"]
+                )
+
+                print(
+                    "  Dubbele advertentie "
+                    "over makelaars heen "
+                    "genegeerd:"
+                )
+
+                print(
+                    f"    {property_data.get('source')} "
+                    f"-> "
+                    f"{property_data.get('address', '')}"
+                )
+
     # --------------------------------------------------------
-    # Bepaal nieuwe advertenties
+    # Nieuwe advertenties
     # --------------------------------------------------------
 
     new_properties = []
@@ -1735,56 +2395,23 @@ def process_properties(
             "id"
         ]
 
-        # Exact dezelfde URL reeds gekend
         if property_id in seen:
             continue
 
-        cross_key = property_data.get(
-            "cross_source_key",
-            "",
-        )
+        if property_id in duplicate_ids:
 
-        # Als exact hetzelfde pand momenteel
-        # bij meerdere makelaars staat, melden
-        # we maar één versie.
-        if cross_key:
-
-            duplicates = (
-                current_cross_source_keys.get(
-                    cross_key,
-                    [],
-                )
+            seen.add(
+                property_id
             )
 
-            if len(duplicates) > 1:
-
-                # Kies deterministisch één makelaar.
-                # De eerste in de scanvolgorde wint.
-                first = duplicates[0]
-
-                if (
-                    property_data["id"]
-                    != first["id"]
-                ):
-
-                    print(
-                        "  Dubbele advertentie "
-                        "over makelaars heen "
-                        "genegeerd: "
-                        f"{property_data.get('address', '')}"
-                    )
-
-                    seen.add(
-                        property_id
-                    )
-
-                    continue
+            continue
 
         new_properties.append(
             property_data
         )
 
     print()
+
     print(
         f"{len(seen)} advertenties reeds gekend."
     )
@@ -1825,7 +2452,9 @@ def process_properties(
                 property_data["id"]
             )
 
-        time.sleep(0.5)
+        time.sleep(
+            0.5
+        )
 
     database["seen"] = sorted(
         seen
@@ -1840,8 +2469,6 @@ def process_properties(
     save_database(
         database
     )
-
-    return new_properties
 
 
 # ============================================================
@@ -1869,11 +2496,17 @@ def main():
     all_properties = []
 
     scanners = [
+
         scan_immo_drie,
+
         scan_domestic,
+
         scan_heylen,
+
         scan_hillewaere,
+
         scan_century21,
+
         scan_dewaele,
     ]
 
@@ -1884,6 +2517,7 @@ def main():
             properties = scanner()
 
             if properties:
+
                 all_properties.extend(
                     properties
                 )
@@ -1898,12 +2532,12 @@ def main():
             )
 
     # --------------------------------------------------------
-    # Exacte dubbele URL's verwijderen
+    # Exacte dubbele URL's verwijderen.
     # --------------------------------------------------------
 
     unique_properties = []
 
-    seen_scan_ids = set()
+    seen_ids = set()
 
     for property_data in all_properties:
 
@@ -1911,10 +2545,10 @@ def main():
             "id"
         ]
 
-        if property_id in seen_scan_ids:
+        if property_id in seen_ids:
             continue
 
-        seen_scan_ids.add(
+        seen_ids.add(
             property_id
         )
 
