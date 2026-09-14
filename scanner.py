@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import json
 import os
 import re
+import time
 
 
 # ============================================================
@@ -17,38 +18,6 @@ SEEN_FILE = "seen_properties.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
-
-# ============================================================
-# IMMO DRIE PAGINA OPHALEN
-# ============================================================
-
-def get_immo_drie_page(page):
-
-    if page == 1:
-        url = IMMO_DRIE_URL
-    else:
-        url = f"{IMMO_DRIE_URL}/pagina-{page}"
-
-    print(f"Pagina {page} controleren...")
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/139.0 Safari/537.36"
-        )
-    }
-
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    return response.text
 
 
 # ============================================================
@@ -116,6 +85,40 @@ def extract_city(text):
         return match.group(1)
 
     return None
+
+
+# ============================================================
+# IMMO DRIE PAGINA OPHALEN
+# ============================================================
+
+def get_immo_drie_page(page):
+
+    if page == 1:
+        url = IMMO_DRIE_URL
+    else:
+        url = f"{IMMO_DRIE_URL}/pagina-{page}"
+
+    print(
+        f"Pagina {page} controleren..."
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/139.0 Safari/537.36"
+        )
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    return response.text
 
 
 # ============================================================
@@ -382,19 +385,11 @@ def send_telegram(property_data):
 
     message_lines = []
 
-    # --------------------------------------------------------
-    # TITEL
-    # --------------------------------------------------------
-
     message_lines.append(
         "🚨 NIEUW VASTGOED"
     )
 
     message_lines.append("")
-
-    # --------------------------------------------------------
-    # TYPE
-    # --------------------------------------------------------
 
     property_type = property_data.get(
         "type"
@@ -404,10 +399,6 @@ def send_telegram(property_data):
         message_lines.append(
             f"🏠 {property_type}"
         )
-
-    # --------------------------------------------------------
-    # LOCATIE
-    # --------------------------------------------------------
 
     city = property_data.get(
         "city"
@@ -420,10 +411,6 @@ def send_telegram(property_data):
 
     message_lines.append("")
 
-    # --------------------------------------------------------
-    # PRIJS
-    # --------------------------------------------------------
-
     price = property_data.get(
         "price"
     )
@@ -432,10 +419,6 @@ def send_telegram(property_data):
         message_lines.append(
             f"💰 {price}"
         )
-
-    # --------------------------------------------------------
-    # SLAAPKAMERS
-    # --------------------------------------------------------
 
     bedrooms = property_data.get(
         "bedrooms"
@@ -446,10 +429,6 @@ def send_telegram(property_data):
             f"🛏️ {bedrooms} slaapkamers"
         )
 
-    # --------------------------------------------------------
-    # LEEFRUIMTE
-    # --------------------------------------------------------
-
     living_area = property_data.get(
         "living_area"
     )
@@ -458,10 +437,6 @@ def send_telegram(property_data):
         message_lines.append(
             f"📐 {living_area} m² leefruimte"
         )
-
-    # --------------------------------------------------------
-    # GROND
-    # --------------------------------------------------------
 
     ground_area = property_data.get(
         "ground_area"
@@ -474,10 +449,6 @@ def send_telegram(property_data):
 
     message_lines.append("")
 
-    # --------------------------------------------------------
-    # BRON
-    # --------------------------------------------------------
-
     source = property_data.get(
         "source"
     )
@@ -486,10 +457,6 @@ def send_telegram(property_data):
         message_lines.append(
             f"🏢 {source}"
         )
-
-    # --------------------------------------------------------
-    # LINK
-    # --------------------------------------------------------
 
     url = property_data.get(
         "url"
@@ -500,10 +467,6 @@ def send_telegram(property_data):
         message_lines.append(
             f"🔗 {url}"
         )
-
-    # --------------------------------------------------------
-    # BERICHT MAKEN
-    # --------------------------------------------------------
 
     message = "\n".join(
         message_lines
@@ -622,15 +585,56 @@ def get_domestic_page():
         )
     }
 
-    response = requests.get(
-        DOMESTIC_URL,
-        headers=headers,
-        timeout=30
-    )
+    max_attempts = 3
 
-    response.raise_for_status()
+    for attempt in range(
+        1,
+        max_attempts + 1
+    ):
 
-    return response.text
+        try:
+
+            print(
+                f"  Poging {attempt}/{max_attempts}..."
+            )
+
+            response = requests.get(
+                DOMESTIC_URL,
+                headers=headers,
+                timeout=60
+            )
+
+            response.raise_for_status()
+
+            print(
+                "  Domestic succesvol bereikbaar."
+            )
+
+            return response.text
+
+        except requests.RequestException as error:
+
+            print(
+                f"  Domestic poging {attempt} "
+                f"mislukt: {error}"
+            )
+
+            if attempt < max_attempts:
+
+                print(
+                    "  Opnieuw proberen..."
+                )
+
+                time.sleep(5)
+
+            else:
+
+                print(
+                    "  Domestic is momenteel "
+                    "niet bereikbaar."
+                )
+
+    return None
 
 
 # ============================================================
@@ -638,6 +642,9 @@ def get_domestic_page():
 # ============================================================
 
 def find_domestic_properties(html):
+
+    if not html:
+        return []
 
     soup = BeautifulSoup(
         html,
@@ -674,14 +681,12 @@ def find_domestic_properties(html):
 
             continue
 
-        # Alleen vastgoed
         if (
             "/nl/" not in url
             or "te-koop" not in url.lower()
         ):
             continue
 
-        # Categoriepagina's uitsluiten
         category_paths = [
             "/woningen/",
             "/appartement/",
@@ -696,7 +701,6 @@ def find_domestic_properties(html):
         ):
             continue
 
-        # Echte advertentie moet ID hebben
         id_matches = re.findall(
             r"(\d{5,})",
             url
@@ -710,7 +714,6 @@ def find_domestic_properties(html):
             + id_matches[-1]
         )
 
-        # Algemene Arendonk-pagina uitsluiten
         if url.rstrip("/").lower().endswith(
             "arendonk-2370"
         ):
@@ -726,7 +729,6 @@ def find_domestic_properties(html):
         if not text:
             continue
 
-        # Alleen Arendonk
         if (
             "arendonk" not in text.lower()
             and "arendonk" not in url.lower()
@@ -793,6 +795,14 @@ def scan_domestic():
 
         html = get_domestic_page()
 
+        if not html:
+
+            print(
+                "  Domestic overgeslagen."
+            )
+
+            return []
+
         properties = find_domestic_properties(
             html
         )
@@ -804,7 +814,7 @@ def scan_domestic():
 
         return properties
 
-    except requests.RequestException as error:
+    except Exception as error:
 
         print(
             f"Fout bij Domestic: {error}"
