@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import re
 
-IMMO_DRIE_URL = "https://www.immodrie.be/nl/te-koop/woningen"
+BASE_URL = "https://www.immodrie.be"
+IMMO_DRIE_URL = f"{BASE_URL}/nl/te-koop/woningen"
 
 
 def get_page(url):
@@ -22,6 +23,7 @@ def get_page(url):
 
 
 def parse_property(text, url):
+
     property_data = {
         "url": url,
         "price": None,
@@ -33,23 +35,32 @@ def parse_property(text, url):
         "id": None,
     }
 
-    # Uniek woning-ID uit de URL
+    # Uniek ID
     match = re.search(r"/(\d+)$", url)
+
     if match:
         property_data["id"] = match.group(1)
 
     # Prijs
     match = re.search(r"€\s*([\d.]+)", text)
+
     if match:
-        property_data["price"] = int(match.group(1).replace(".", ""))
+        property_data["price"] = int(
+            match.group(1).replace(".", "")
+        )
 
     # Slaapkamers
     match = re.search(r"Slaapkamers\s*(\d+)", text)
+
     if match:
         property_data["bedrooms"] = int(match.group(1))
 
     # Leefruimte
-    match = re.search(r"Leefruimte\s*([\d.]+)\s*m²", text)
+    match = re.search(
+        r"Leefruimte\s*([\d.]+)\s*m²",
+        text
+    )
+
     if match:
         property_data["living_area"] = int(
             match.group(1).replace(".", "")
@@ -60,6 +71,7 @@ def parse_property(text, url):
         r"Titles\.surface_ground\s*([\d.]+)\s*m²",
         text
     )
+
     if match:
         property_data["ground_area"] = int(
             match.group(1).replace(".", "")
@@ -74,18 +86,19 @@ def parse_property(text, url):
     if match:
         property_data["city"] = match.group(2).strip()
 
-    # Type woning
+    # Type
     type_text = text
 
-    # Status verwijderen
-    for word in ["Nieuw", "Te koop", "In optie", "Verkocht"]:
+    for word in [
+        "Nieuw",
+        "Te koop",
+        "In optie",
+        "Verkocht",
+        "Video",
+        "Virtueel"
+    ]:
         type_text = type_text.replace(word, "")
 
-    # Extra labels verwijderen
-    for word in ["Video", "Virtueel"]:
-        type_text = type_text.replace(word, "")
-
-    # Postcode + gemeente + alles erna verwijderen
     type_text = re.sub(
         r"\d{4}\s+.+?\s+€.*",
         "",
@@ -97,11 +110,7 @@ def parse_property(text, url):
     return property_data
 
 
-def scan_immo_drie():
-
-    print("Immo Drie controleren...")
-
-    soup = get_page(IMMO_DRIE_URL)
+def find_properties(soup):
 
     properties = []
 
@@ -117,10 +126,7 @@ def scan_immo_drie():
         ):
             continue
 
-        url = urljoin(
-            "https://www.immodrie.be",
-            href
-        )
+        url = urljoin(BASE_URL, href)
 
         text = link.get_text(" ", strip=True)
 
@@ -131,15 +137,42 @@ def scan_immo_drie():
 
         properties.append(property_data)
 
-    # Dubbele URL's verwijderen
-    unique_properties = {}
+    return properties
 
-    for property_data in properties:
-        unique_properties[property_data["url"]] = property_data
 
-    properties = list(unique_properties.values())
+def scan_immo_drie():
 
-    print(f"{len(properties)} woningen gevonden.")
+    print("Immo Drie controleren...")
+
+    all_properties = {}
+
+    # We controleren maximaal 20 pagina's
+    for page_number in range(1, 21):
+
+        if page_number == 1:
+            url = IMMO_DRIE_URL
+        else:
+            url = f"{IMMO_DRIE_URL}?page={page_number}"
+
+        print(f"Pagina {page_number} controleren...")
+
+        soup = get_page(url)
+
+        properties = find_properties(soup)
+
+        print(f"  {len(properties)} woningen gevonden.")
+
+        # Als er geen woningen meer zijn, zijn we klaar
+        if not properties:
+            break
+
+        for property_data in properties:
+            all_properties[property_data["url"]] = property_data
+
+    properties = list(all_properties.values())
+
+    print()
+    print(f"TOTAAL: {len(properties)} woningen gevonden.")
 
     for property_data in properties:
 
