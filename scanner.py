@@ -786,17 +786,17 @@ def main():
 
     properties = scan_immo_drie()
 
-print()
+    print()
 
-domestic_properties = scan_domestic()
+    domestic_properties = scan_domestic()
 
-print()
+    print()
 
-all_properties = properties + domestic_properties
+    all_properties = properties + domestic_properties
 
-process_properties(
-    all_properties
-)
+    process_properties(
+        all_properties
+    )
 
     print()
     print(
