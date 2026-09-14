@@ -380,48 +380,133 @@ def save_seen(seen):
 
 def send_telegram(property_data):
 
-    price = (
-        property_data["price"]
-        or "Prijs op aanvraag"
+    message_lines = []
+
+    # --------------------------------------------------------
+    # TITEL
+    # --------------------------------------------------------
+
+    message_lines.append(
+        "🚨 NIEUW VASTGOED"
     )
 
-    bedrooms = (
-        property_data["bedrooms"]
-        if property_data["bedrooms"]
-        is not None
-        else "Onbekend"
+    message_lines.append("")
+
+    # --------------------------------------------------------
+    # TYPE
+    # --------------------------------------------------------
+
+    property_type = property_data.get(
+        "type"
     )
 
-    living_area = (
-        property_data["living_area"]
-        if property_data["living_area"]
-        else "Onbekend"
+    if property_type:
+        message_lines.append(
+            f"🏠 {property_type}"
+        )
+
+    # --------------------------------------------------------
+    # LOCATIE
+    # --------------------------------------------------------
+
+    city = property_data.get(
+        "city"
     )
 
-    ground_area = (
-        property_data["ground_area"]
-        if property_data["ground_area"]
-        else "Onbekend"
+    if city:
+        message_lines.append(
+            f"📍 {city}"
+        )
+
+    message_lines.append("")
+
+    # --------------------------------------------------------
+    # PRIJS
+    # --------------------------------------------------------
+
+    price = property_data.get(
+        "price"
     )
 
-    message = (
-        "🚨 NIEUW VASTGOED\n\n"
+    if price:
+        message_lines.append(
+            f"💰 {price}"
+        )
 
-        f"🏠 {property_data['type']}\n"
+    # --------------------------------------------------------
+    # SLAAPKAMERS
+    # --------------------------------------------------------
 
-        f"📍 {property_data['city']}\n\n"
+    bedrooms = property_data.get(
+        "bedrooms"
+    )
 
-        f"💰 {price}\n"
+    if bedrooms is not None:
+        message_lines.append(
+            f"🛏️ {bedrooms} slaapkamers"
+        )
 
-        f"🛏️ {bedrooms} slaapkamers\n"
+    # --------------------------------------------------------
+    # LEEFRUIMTE
+    # --------------------------------------------------------
 
-        f"📐 {living_area} m² leefruimte\n"
+    living_area = property_data.get(
+        "living_area"
+    )
 
-        f"🌳 {ground_area} m² grond\n\n"
+    if living_area:
+        message_lines.append(
+            f"📐 {living_area} m² leefruimte"
+        )
 
-        f"🏢 {property_data['source']}\n\n"
+    # --------------------------------------------------------
+    # GROND
+    # --------------------------------------------------------
 
-        f"👉 {property_data['url']}"
+    ground_area = property_data.get(
+        "ground_area"
+    )
+
+    if ground_area:
+        message_lines.append(
+            f"🌳 {ground_area} m² grond"
+        )
+
+    message_lines.append("")
+
+    # --------------------------------------------------------
+    # BRON
+    # --------------------------------------------------------
+
+    source = property_data.get(
+        "source"
+    )
+
+    if source:
+        message_lines.append(
+            f"🏢 {source}"
+        )
+
+    # --------------------------------------------------------
+    # LINK
+    # --------------------------------------------------------
+
+    url = property_data.get(
+        "url"
+    )
+
+    if url:
+        message_lines.append("")
+        message_lines.append(
+            f"🔗 {url}"
+        )
+
+    # --------------------------------------------------------
+    # BERICHT MAKEN
+    # --------------------------------------------------------
+
+    message = "\n".join(
+        message_lines
     )
 
     telegram_url = (
@@ -434,7 +519,8 @@ def send_telegram(property_data):
         telegram_url,
         data={
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
+            "text": message,
+            "disable_web_page_preview": False
         },
         timeout=30
     )
@@ -588,15 +674,14 @@ def find_domestic_properties(html):
 
             continue
 
-        # Alleen links naar vastgoed
+        # Alleen vastgoed
         if (
             "/nl/" not in url
             or "te-koop" not in url.lower()
         ):
             continue
 
-        # Categorie- en zoekpagina's uitsluiten.
-        # Deze hebben geen uniek pand-ID.
+        # Categoriepagina's uitsluiten
         category_paths = [
             "/woningen/",
             "/appartement/",
@@ -611,8 +696,7 @@ def find_domestic_properties(html):
         ):
             continue
 
-        # Een echte advertentie moet een numerieke
-        # advertentie-ID in de URL hebben.
+        # Echte advertentie moet ID hebben
         id_matches = re.findall(
             r"(\d{5,})",
             url
@@ -626,7 +710,7 @@ def find_domestic_properties(html):
             + id_matches[-1]
         )
 
-        # De algemene Arendonk-zoekpagina uitsluiten.
+        # Algemene Arendonk-pagina uitsluiten
         if url.rstrip("/").lower().endswith(
             "arendonk-2370"
         ):
