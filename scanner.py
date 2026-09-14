@@ -1,4 +1,3 @@
-```python
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -19,7 +18,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 # ============================================================
-# IMMO DRIE
+# IMMO DRIE PAGINA OPHALEN
 # ============================================================
 
 def get_immo_drie_page(page):
@@ -60,7 +59,7 @@ def get_immo_drie_page(page):
 
 
 # ============================================================
-# TEKST HULPFUNCTIES
+# HULPFUNCTIES
 # ============================================================
 
 def clean_text(text):
@@ -68,13 +67,10 @@ def clean_text(text):
 
 
 def extract_price(text):
-    """
-    Zoekt bijvoorbeeld:
-    € 329.000
-    €329.000
-    """
-
-    match = re.search(r"€\s*[\d\.\,]+", text)
+    match = re.search(
+        r"€\s*[\d\.\,]+",
+        text
+    )
 
     if match:
         return match.group(0).strip()
@@ -83,11 +79,6 @@ def extract_price(text):
 
 
 def extract_bedrooms(text):
-    """
-    Zoekt bijvoorbeeld:
-    Slaapkamers 3
-    """
-
     match = re.search(
         r"Slaapkamers\s*(\d+)",
         text,
@@ -101,17 +92,10 @@ def extract_bedrooms(text):
 
 
 def extract_area(text, label):
-    """
-    Zoekt bijvoorbeeld:
-
-    Leefruimte 162m²
-
-    of:
-
-    Titles.surface_ground 583m²
-    """
-
-    pattern = rf"{re.escape(label)}\s*(\d+(?:[.,]\d+)?)\s*m²"
+    pattern = (
+        rf"{re.escape(label)}\s*"
+        rf"(\d+(?:[.,]\d+)?)\s*m²"
+    )
 
     match = re.search(
         pattern,
@@ -126,15 +110,6 @@ def extract_area(text, label):
 
 
 def extract_city(text):
-    """
-    Zoekt Belgische postcode + plaats.
-
-    Bijvoorbeeld:
-    2370 Arendonk
-    2480 Dessel
-    2470 Retie
-    """
-
     match = re.search(
         r"\b\d{4}\s+([A-Za-zÀ-ÿ'’\-]+)",
         text
@@ -147,23 +122,10 @@ def extract_city(text):
 
 
 # ============================================================
-# TYPE VASTGOED
+# VASTGOEDTYPE
 # ============================================================
 
 def extract_property_type(text):
-    """
-    Probeert het vastgoedtype uit de advertentietekst te halen.
-
-    We verwijderen eerst statussen zoals:
-    Nieuw
-    Te koop
-    In optie
-    Verkocht
-
-    en labels zoals:
-    Video
-    Virtueel
-    """
 
     property_text = text
 
@@ -184,7 +146,6 @@ def extract_property_type(text):
             flags=re.IGNORECASE
         )
 
-    # Overbodige informatie achteraf verwijderen
     property_text = re.split(
         r"\b\d{4}\b",
         property_text,
@@ -193,108 +154,140 @@ def extract_property_type(text):
 
     property_text = clean_text(property_text)
 
-    return property_text if property_text else "Vastgoed"
+    if property_text:
+        return property_text
+
+    return "Vastgoed"
 
 
 # ============================================================
-# ADVERTENTIES UITLEZEN
+# ADVERTENTIES VINDEN
 # ============================================================
 
 def find_properties(html):
-    """
-    Leest ALLE vastgoedadvertenties op een Immo Drie-pagina.
 
-    Belangrijk:
-    We filteren NIET meer op URL zoals 'huis-te-koop-in'.
-
-    Hierdoor kunnen ook:
-    - appartementen
-    - bouwgronden
-    - handelszaken
-    - kantoren
-    - gemengde gebouwen
-    - recreatieve terreinen
-    - enz.
-    worden gevonden.
-    """
-
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
 
     properties = []
 
-    # Alle links op de pagina bekijken
-    for link in soup.find_all("a", href=True):
+    # Alle links bekijken
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
 
-        href = link.get("href", "").strip()
+        href = link.get(
+            "href",
+            ""
+        ).strip()
 
         if not href:
             continue
 
-        # Alleen echte vastgoeddetailpagina's
-        if "immodrie.be" not in href and not href.startswith("/"):
+        # Alleen links van Immo Drie
+        if (
+            "immodrie.be" not in href
+            and not href.startswith("/")
+        ):
             continue
 
         # Absolute URL maken
         if href.startswith("/"):
-            url = "https://www.immodrie.be" + href
+            url = (
+                "https://www.immodrie.be"
+                + href
+            )
         else:
             url = href
 
-        # We zoeken naar de typische detailpagina's
+        # Vastgoeddetailpagina herkennen
         if "-te-koop-in-" not in url:
             continue
 
-        # Advertentietekst
-        text = clean_text(link.get_text(" ", strip=True))
+        # Tekst van de advertentie
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
 
         if not text:
             continue
 
-        # ID uit URL halen
-        id_matches = re.findall(r"(\d{6,})", url)
+        # Advertentie-ID uit URL halen
+        id_matches = re.findall(
+            r"(\d{6,})",
+            url
+        )
 
         if not id_matches:
             continue
 
         property_id = id_matches[-1]
 
-        # Type
-        property_type = extract_property_type(text)
-
-        # Stad
+        # Stad bepalen
         city = extract_city(text)
 
-        # Alleen Arendonk
         if not city:
             continue
 
+        # Alleen Arendonk
         if city.lower() != "arendonk":
             continue
 
         # Status bepalen
         status = "Onbekend"
 
-        if re.search(r"\bNieuw\b", text, re.IGNORECASE):
+        if re.search(
+            r"\bNieuw\b",
+            text,
+            re.IGNORECASE
+        ):
             status = "Nieuw"
-        elif re.search(r"\bTe koop\b", text, re.IGNORECASE):
+
+        elif re.search(
+            r"\bTe koop\b",
+            text,
+            re.IGNORECASE
+        ):
             status = "Te koop"
-        elif re.search(r"\bIn optie\b", text, re.IGNORECASE):
+
+        elif re.search(
+            r"\bIn optie\b",
+            text,
+            re.IGNORECASE
+        ):
             status = "In optie"
-        elif re.search(r"\bVerkocht\b", text, re.IGNORECASE):
+
+        elif re.search(
+            r"\bVerkocht\b",
+            text,
+            re.IGNORECASE
+        ):
             status = "Verkocht"
 
-        # Alleen actieve te-koop advertenties
-        if status not in ["Nieuw", "Te koop"]:
+        # Alleen actief aanbod
+        if status not in [
+            "Nieuw",
+            "Te koop"
+        ]:
             continue
 
         property_data = {
             "id": property_id,
             "source": "Immo Drie",
-            "type": property_type,
+            "type": extract_property_type(text),
             "city": city,
             "price": extract_price(text),
             "bedrooms": extract_bedrooms(text),
-            "living_area": extract_area(text, "Leefruimte"),
+            "living_area": extract_area(
+                text,
+                "Leefruimte"
+            ),
             "ground_area": extract_area(
                 text,
                 "Titles.surface_ground"
@@ -303,40 +296,57 @@ def find_properties(html):
             "url": url
         }
 
-        properties.append(property_data)
+        properties.append(
+            property_data
+        )
 
     # Dubbels verwijderen
     unique_properties = {}
 
     for property_data in properties:
-        unique_properties[property_data["id"]] = property_data
+        unique_properties[
+            property_data["id"]
+        ] = property_data
 
-    return list(unique_properties.values())
+    return list(
+        unique_properties.values()
+    )
 
 
 # ============================================================
-# DATABASE
+# DATABASE LADEN
 # ============================================================
 
 def load_seen():
-    if not os.path.exists(SEEN_FILE):
+
+    if not os.path.exists(
+        SEEN_FILE
+    ):
         return set()
 
     try:
+
         with open(
             SEEN_FILE,
             "r",
             encoding="utf-8"
         ) as file:
+
             data = json.load(file)
 
         return set(data)
 
     except Exception:
+
         return set()
 
 
+# ============================================================
+# DATABASE OPSLAAN
+# ============================================================
+
 def save_seen(seen):
+
     with open(
         SEEN_FILE,
         "w",
@@ -352,16 +362,20 @@ def save_seen(seen):
 
 
 # ============================================================
-# TELEGRAM
+# TELEGRAM MELDING
 # ============================================================
 
 def send_telegram(property_data):
 
-    price = property_data["price"] or "Prijs op aanvraag"
+    price = (
+        property_data["price"]
+        or "Prijs op aanvraag"
+    )
 
     bedrooms = (
         property_data["bedrooms"]
-        if property_data["bedrooms"] is not None
+        if property_data["bedrooms"]
+        is not None
         else "Onbekend"
     )
 
@@ -390,8 +404,9 @@ def send_telegram(property_data):
     )
 
     telegram_url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+        "https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}"
+        "/sendMessage"
     )
 
     response = requests.post(
@@ -406,59 +421,79 @@ def send_telegram(property_data):
     response.raise_for_status()
 
     print(
-        f"Telegrammelding verstuurd voor "
+        "Telegrammelding verstuurd voor "
         f"{property_data['id']}"
     )
 
 
 # ============================================================
-# SCANNEN
+# IMMO DRIE SCANNEN
 # ============================================================
 
 def scan_immo_drie():
 
-    print("Immo Drie controleren...")
+    print(
+        "Immo Drie controleren..."
+    )
 
     all_properties = []
 
-    # We blijven pagina's controleren totdat
-    # er geen resultaten meer zijn.
+    # Maximaal 20 pagina's controleren
     for page in range(1, 21):
 
         try:
-            html = get_immo_drie_page(page)
 
-            properties = find_properties(html)
+            html = get_immo_drie_page(
+                page
+            )
+
+            properties = find_properties(
+                html
+            )
 
             print(
-                f"  {len(properties)} woningen gevonden."
+                f"  {len(properties)} "
+                "vastgoedadvertenties gevonden."
             )
 
             if not properties:
-                print("Geen vastgoed meer gevonden.")
+
+                print(
+                    "Geen vastgoed meer gevonden."
+                )
+
                 break
 
-            all_properties.extend(properties)
+            all_properties.extend(
+                properties
+            )
 
         except requests.RequestException as error:
 
             print(
-                f"Fout bij pagina {page}: {error}"
+                f"Fout bij pagina {page}: "
+                f"{error}"
             )
 
             break
 
-    # Dubbels verwijderen over alle pagina's
+    # Alle dubbels verwijderen
     unique_properties = {}
 
     for property_data in all_properties:
-        unique_properties[property_data["id"]] = property_data
 
-    result = list(unique_properties.values())
+        unique_properties[
+            property_data["id"]
+        ] = property_data
+
+    result = list(
+        unique_properties.values()
+    )
 
     print(
-        f"TOTAAL: {len(result)} unieke vastgoedadvertenties "
-        f"in Arendonk gevonden."
+        "TOTAAL: "
+        f"{len(result)} unieke "
+        "vastgoedadvertenties gevonden."
     )
 
     return result
@@ -473,19 +508,27 @@ def process_properties(properties):
     seen = load_seen()
 
     print(
-        f"{len(seen)} advertenties reeds gekend."
+        f"{len(seen)} advertenties "
+        "reeds gekend."
     )
 
-    # Eerste keer: database vullen zonder meldingen
+    # Eerste keer starten:
+    # bestaande advertenties opslaan
+    # zonder meldingen.
     if not seen:
 
         print(
-            "Database is leeg. "
-            "Bestaand aanbod wordt opgeslagen "
-            "zonder Telegrammeldingen."
+            "Database is leeg."
+        )
+
+        print(
+            "Bestaand aanbod wordt "
+            "opgeslagen zonder "
+            "Telegrammeldingen."
         )
 
         for property_data in properties:
+
             seen.add(
                 property_data["id"]
             )
@@ -503,61 +546,78 @@ def process_properties(properties):
 
     for property_data in properties:
 
-        property_id = property_data["id"]
+        property_id = (
+            property_data["id"]
+        )
 
         if property_id not in seen:
-            new_properties.append(property_data)
+
+            new_properties.append(
+                property_data
+            )
 
     print(
         f"{len(new_properties)} nieuwe "
-        f"advertenties gevonden."
+        "advertenties gevonden."
     )
 
     for property_data in new_properties:
 
         try:
 
-            send_telegram(property_data)
+            send_telegram(
+                property_data
+            )
 
             seen.add(
                 property_data["id"]
             )
 
-            # Meteen opslaan nadat Telegram
-            # succesvol is verzonden.
+            # Meteen opslaan nadat
+            # Telegram succesvol was.
             save_seen(seen)
 
         except Exception as error:
 
             print(
-                f"Fout bij Telegrammelding voor "
-                f"{property_data['id']}: {error}"
+                "Fout bij Telegrammelding "
+                f"voor {property_data['id']}: "
+                f"{error}"
             )
 
 
 # ============================================================
-# MAIN
+# START
 # ============================================================
 
 def main():
 
     print()
-    print("====================================")
-    print("Vastgoed scanner gestart!")
-    print("====================================")
+    print(
+        "===================================="
+    )
+    print(
+        "Vastgoed scanner gestart!"
+    )
+    print(
+        "===================================="
+    )
     print()
 
     properties = scan_immo_drie()
 
     print()
 
-    process_properties(properties)
+    process_properties(
+        properties
+    )
 
     print()
-    print("Scanner klaar.")
+    print(
+        "Scanner klaar."
+    )
     print()
 
 
 if __name__ == "__main__":
     main()
-```
