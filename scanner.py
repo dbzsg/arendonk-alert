@@ -1,33 +1,64 @@
-import os
 import requests
+from bs4 import BeautifulSoup
 
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+IMMO_DRIE_URL = "https://www.immodrie.be/nl/te-koop/woningen"
 
 
-def send_telegram(message):
+def get_page(url):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/139.0 Safari/537.36"
+        )
+    }
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    )
-
-    response = requests.post(
+    response = requests.get(
         url,
-        data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        },
+        headers=headers,
         timeout=30
     )
 
     response.raise_for_status()
 
+    return BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
 
-print("Vastgoed scanner gestart!")
 
-send_telegram(
-    "🏠 Vastgoed scanner werkt!\n\n"
-    "GitHub → Python → Telegram ✅"
-)
+def scan_immo_drie():
+
+    print("Immo Drie controleren...")
+
+    soup = get_page(IMMO_DRIE_URL)
+
+    links = soup.find_all("a", href=True)
+
+    print(f"Aantal links gevonden: {len(links)}")
+
+    for link in links:
+
+        href = link["href"]
+
+        if "immodrie.be" not in href:
+            if href.startswith("/"):
+                href = "https://www.immodrie.be" + href
+            else:
+                continue
+
+        text = link.get_text(" ", strip=True)
+
+        if text:
+            print(
+                f"\n{text[:200]}"
+                f"\n{href}"
+            )
+
+
+if __name__ == "__main__":
+
+    print("Vastgoed scanner gestart!")
+
+    scan_immo_drie()
