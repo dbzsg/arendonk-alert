@@ -135,7 +135,9 @@ def find_properties(soup):
 
         property_data = parse_property(text, url)
 
-        properties.append(property_data)
+        # Alleen geldige woningen met ID
+        if property_data["id"]:
+            properties.append(property_data)
 
     return properties
 
@@ -152,7 +154,7 @@ def scan_immo_drie():
         if page_number == 1:
             url = IMMO_DRIE_URL
         else:
-            url = f"{IMMO_DRIE_URL}?page={page_number}"
+            url = f"{IMMO_DRIE_URL}/pagina-{page_number}"
 
         print(f"Pagina {page_number} controleren...")
 
@@ -162,17 +164,18 @@ def scan_immo_drie():
 
         print(f"  {len(properties)} woningen gevonden.")
 
-        # Als er geen woningen meer zijn, zijn we klaar
+        # Geen woningen meer = einde
         if not properties:
+            print("Geen woningen meer gevonden.")
             break
 
         for property_data in properties:
-            all_properties[property_data["url"]] = property_data
+            all_properties[property_data["id"]] = property_data
 
     properties = list(all_properties.values())
 
     print()
-    print(f"TOTAAL: {len(properties)} woningen gevonden.")
+    print(f"TOTAAL: {len(properties)} unieke woningen gevonden.")
 
     for property_data in properties:
 
