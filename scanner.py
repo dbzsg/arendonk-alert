@@ -2,9 +2,13 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import re
+import json
+import os
 
 BASE_URL = "https://www.immodrie.be"
 IMMO_DRIE_URL = f"{BASE_URL}/nl/te-koop/woningen"
+
+SEEN_FILE = "seen_properties.json"
 
 
 def get_page(url):
@@ -135,7 +139,6 @@ def find_properties(soup):
 
         property_data = parse_property(text, url)
 
-        # Alleen geldige woningen met ID
         if property_data["id"]:
             properties.append(property_data)
 
@@ -148,7 +151,6 @@ def scan_immo_drie():
 
     all_properties = {}
 
-    # We controleren maximaal 20 pagina's
     for page_number in range(1, 21):
 
         if page_number == 1:
@@ -164,7 +166,6 @@ def scan_immo_drie():
 
         print(f"  {len(properties)} woningen gevonden.")
 
-        # Geen woningen meer = einde
         if not properties:
             print("Geen woningen meer gevonden.")
             break
@@ -177,24 +178,137 @@ def scan_immo_drie():
     print()
     print(f"TOTAAL: {len(properties)} unieke woningen gevonden.")
 
+    return properties
+
+
+def load_seen():
+
+    if not os.path.exists(SEEN_FILE):
+        return set()
+
+    try:
+        with open(SEEN_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        return set(data)
+
+    except Exception:
+        return set()
+
+
+def save_seen(seen):
+
+    with open(SEEN_FILE, "w", encoding="utf-8") as file:
+        json.dump(
+            sorted(list(seen)),
+            file,
+            indent=2
+        )
+
+
+def send_telegram(property_data):
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("Telegram gegevens ontbreken.")
+        return
+
+    price = property_data["price"]
+
+    if price:
+        price_text = f"€{price:,.0f}".replace(",", ".")
+    else:
+        price_text = "Prijs onbekend"
+
+    message = (
+        "🚨 NIEUWE WONING\n\n"
+        f"🏠 {property_data['type']}\n"
+        f"📍 {property_data['city']}\n\n"
+        f"💰 {price_text}\n"
+        f"🛏️ {property_data['bedrooms'] or 'Onbekend'} slaapkamers\n"
+        f"📐 {property_data['living_area'] or 'Onbekend'} m² leefruimte\n"
+        f"🌳 {property_data['ground_area'] or 'Onbekend'} m² grond\n\n"
+        "🏢 Immo Drie\n\n"
+        f"👉 {property_data['url']}"
+    )
+
+    telegram_url = (
+        f"https://api.telegram.org/bot{token}/sendMessage"
+    )
+
+    response = requests.post(
+        telegram_url,
+        data={
+            "chat_id": chat_id,
+            "text": message,
+        },
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    print(
+        f"Telegrammelding verstuurd voor "
+        f"{property_data['id']}"
+    )
+
+
+def process_properties(properties):
+
+    seen = load_seen()
+
+    print(f"{len(seen)} woningen reeds gekend.")
+
+    # Eerste keer = bestaande woningen initialiseren
+    if not seen:
+
+        print(
+            "Eerste scan: bestaande woningen worden "
+            "opgeslagen zonder Telegrammeldingen."
+        )
+
+        for property_data in properties:
+            seen.add(property_data["id"])
+
+        save_seen(seen)
+
+        print(
+            f"{len(properties)} woningen opgeslagen."
+        )
+
+        return
+
+    # Nieuwe woningen zoeken
+    new_properties = []
+
     for property_data in properties:
 
-        print("\n----------------------------")
+        property_id = property_data["id"]
 
-        print("ID:", property_data["id"])
-        print("Type:", property_data["type"])
-        print("Plaats:", property_data["city"])
-        print("Prijs:", property_data["price"])
-        print("Slaapkamers:", property_data["bedrooms"])
-        print("Leefruimte:", property_data["living_area"])
-        print("Grond:", property_data["ground_area"])
-        print("URL:", property_data["url"])
+        if property_id not in seen:
+            new_properties.append(property_data)
 
-    return properties
+    print(
+        f"{len(new_properties)} nieuwe woningen gevonden."
+    )
+
+    # Nieuwe woningen melden
+    for property_data in new_properties:
+
+        send_telegram(property_data)
+
+        seen.add(property_data["id"])
+
+    # Nieuwe database opslaan
+    save_seen(seen)
 
 
 if __name__ == "__main__":
 
     print("Vastgoed scanner gestart!")
 
-    scan_immo_drie()
+    properties = scan_immo_drie()
+
+    process_properties(properties)
