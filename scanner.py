@@ -4,6 +4,8 @@ import json
 import os
 import re
 import time
+import hashlib
+from urllib.parse import urljoin, urlparse
 
 
 # ============================================================
@@ -14,10 +16,54 @@ IMMO_DRIE_URL = "https://www.immodrie.be/nl/te-koop"
 
 DOMESTIC_URL = "https://www.domestic.be/nl/te-koop/arendonk-2370"
 
+HEYLEN_URL = "https://www.heylenvastgoed.be/kopen/arendonk"
+
+HILLEWAERE_URL = (
+    "https://www.hillewaere-vastgoed.be/vastgoed/alle/te-koop"
+    "?search-label=Arendonk+%282370%29&view=list"
+)
+
+DEWAELE_URLS = [
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/huis",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/appartement",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/grond",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/garage",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/bedrijfsvastgoed",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/kantoor",
+    "https://www.dewaele.com/nl/te-koop/2370-arendonk/industrie",
+]
+
+CENTURY21_URLS = [
+    "https://www.century21.be/nl/te-koop/huis/arendonk",
+    "https://www.century21.be/nl/te-koop/appartement/arendonk",
+    "https://www.century21.be/nl/te-koop/bouwgrond/arendonk",
+    "https://www.century21.be/nl/te-koop/handelspand/arendonk",
+    "https://www.century21.be/nl/te-koop/garage/arendonk",
+    "https://www.century21.be/nl/te-koop/kantoor/arendonk",
+    "https://www.century21.be/nl/te-koop/magazijn/arendonk",
+]
+
 SEEN_FILE = "seen_properties.json"
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.environ.get(
+    "TELEGRAM_BOT_TOKEN"
+)
+
+TELEGRAM_CHAT_ID = os.environ.get(
+    "TELEGRAM_CHAT_ID"
+)
+
+REQUEST_TIMEOUT = 25
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/139.0 Safari/537.36"
+    ),
+    "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
+}
 
 
 # ============================================================
@@ -28,117 +74,306 @@ def clean_text(text):
     return " ".join(text.split())
 
 
+def absolute_url(base_url, href):
+    return urljoin(base_url, href)
+
+
+def make_hash_id(source, url):
+
+    value = (
+        f"{source}|{url}"
+        .encode("utf-8")
+    )
+
+    return (
+        f"{source.lower().replace(' ', '-')}-"
+        f"{hashlib.sha1(value).hexdigest()[:12]}"
+    )
+
+
 def extract_price(text):
 
+    if not text:
+        return None
+
     match = re.search(
-        r"€\s*[\d\.\,]+",
+        r"€\s*[\d\.\s]+(?:,\d{1,2})?",
         text
     )
 
     if match:
-        return match.group(0).strip()
+        return clean_text(
+            match.group(0)
+        )
 
     return None
 
 
 def extract_bedrooms(text):
 
-    match = re.search(
-        r"Slaapkamers\s*(\d+)",
-        text,
-        re.IGNORECASE
-    )
+    if not text:
+        return None
 
-    if match:
-        return int(match.group(1))
+    patterns = [
+        r"(\d+)\s*slaapkamers?",
+        r"(\d+)\s*slpk(?:\.| )?",
+        r"(\d+)\s*chambres?",
+        r"(\d+)\s*bedrooms?",
+    ]
 
-    return None
+    for pattern in patterns:
 
-
-def extract_area(text, label):
-
-    pattern = (
-        rf"{re.escape(label)}\s*"
-        rf"(\d+(?:[.,]\d+)?)\s*m²"
-    )
-
-    match = re.search(
-        pattern,
-        text,
-        re.IGNORECASE
-    )
-
-    if match:
-        return match.group(1).replace(",", ".")
-
-    return None
-
-
-def extract_city(text):
-
-    match = re.search(
-        r"\b\d{4}\s+([A-Za-zÀ-ÿ'’\-]+)",
-        text
-    )
-
-    if match:
-        return match.group(1)
-
-    return None
-
-
-# ============================================================
-# IMMO DRIE PAGINA OPHALEN
-# ============================================================
-
-def get_immo_drie_page(page):
-
-    if page == 1:
-        url = IMMO_DRIE_URL
-    else:
-        url = f"{IMMO_DRIE_URL}/pagina-{page}"
-
-    print(
-        f"Pagina {page} controleren..."
-    )
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/139.0 Safari/537.36"
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
         )
+
+        if match:
+            return int(
+                match.group(1)
+            )
+
+    return None
+
+
+def extract_area_by_label(
+    text,
+    labels
+):
+
+    if not text:
+        return None
+
+    for label in labels:
+
+        pattern = (
+            rf"{re.escape(label)}"
+            rf"\s*[:\-]?\s*"
+            rf"(\d+(?:[.,]\d+)?)"
+            rf"\s*m²"
+        )
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        if match:
+
+            return (
+                match.group(1)
+                .replace(",", ".")
+            )
+
+    return None
+
+
+def is_arendonk(
+    text,
+    url=""
+):
+
+    combined = (
+        f"{text} {url}"
+        .lower()
+    )
+
+    return (
+        "arendonk" in combined
+        or "2370" in combined
+    )
+
+
+def is_for_sale(text):
+
+    lowered = text.lower()
+
+    if "verkocht" in lowered:
+        return False
+
+    if "sold" in lowered:
+        return False
+
+    if "verhuurd" in lowered:
+        return False
+
+    if "onder optie" in lowered:
+        return False
+
+    if "in optie" in lowered:
+        return False
+
+    return True
+
+
+def extract_property_type(
+    text,
+    url=""
+):
+
+    combined = (
+        f"{text} {url}"
+        .lower()
+    )
+
+    types = [
+        "opbrengsteigendom",
+        "investeringsvastgoed",
+        "bedrijfsvastgoed",
+        "handelspand",
+        "handelszaak",
+        "commercieel",
+        "eengezinswoning",
+        "halfopen bebouwing",
+        "open bebouwing",
+        "bouwgrond",
+        "projectgrond",
+        "landbouwgrond",
+        "appartement",
+        "penthouse",
+        "duplex",
+        "triplex",
+        "studio",
+        "woning",
+        "huis",
+        "villa",
+        "grond",
+        "garage",
+        "parking",
+        "kantoor",
+        "magazijn",
+        "industrie",
+        "chalet",
+    ]
+
+    for property_type in types:
+
+        if property_type in combined:
+
+            return property_type.title()
+
+    return "Vastgoed"
+
+
+def extract_generic_property_data(
+    source,
+    property_id,
+    text,
+    url
+):
+
+    living_area = extract_area_by_label(
+        text,
+        [
+            "Bewoonbare oppervlakte",
+            "Bewoonbare opp",
+            "Woonoppervlakte",
+            "Woonopp.",
+            "Leefruimte",
+            "Bewoonbare oppervlakte:"
+        ]
+    )
+
+    ground_area = extract_area_by_label(
+        text,
+        [
+            "Oppervlakte grond",
+            "Grondoppervlakte",
+            "Perceeloppervlakte",
+            "Perceel opp",
+        ]
+    )
+
+    return {
+
+        "id": property_id,
+
+        "source": source,
+
+        "type": extract_property_type(
+            text,
+            url
+        ),
+
+        "city": "Arendonk",
+
+        "price": extract_price(
+            text
+        ),
+
+        "bedrooms": extract_bedrooms(
+            text
+        ),
+
+        "living_area": living_area,
+
+        "ground_area": ground_area,
+
+        "status": "Te koop",
+
+        "url": url,
     }
 
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=30
-    )
 
-    response.raise_for_status()
+# ============================================================
+# WEBSITE OPHALEN
+# ============================================================
 
-    return response.text
+def get_page(
+    url,
+    timeout=REQUEST_TIMEOUT,
+    attempts=2
+):
+
+    for attempt in range(
+        1,
+        attempts + 1
+    ):
+
+        try:
+
+            response = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=timeout
+            )
+
+            response.raise_for_status()
+
+            return response.text
+
+        except requests.RequestException as error:
+
+            print(
+                f"  Poging {attempt}/{attempts} "
+                f"mislukt: {error}"
+            )
+
+            if attempt < attempts:
+
+                time.sleep(3)
+
+    return None
 
 
 # ============================================================
-# VASTGOEDTYPE IMMO DRIE
+# IMMO DRIE
 # ============================================================
 
-def extract_property_type(text):
+def extract_immo_drie_type(text):
 
     property_text = text
 
-    remove_words = [
+    for word in [
         "Nieuw",
         "Te koop",
         "In optie",
         "Verkocht",
         "Video",
         "Virtueel"
-    ]
-
-    for word in remove_words:
+    ]:
 
         property_text = re.sub(
             rf"\b{re.escape(word)}\b",
@@ -148,7 +383,7 @@ def extract_property_type(text):
         )
 
     property_text = re.split(
-        r"\b\d{4}\b",
+        r"\b2370\b",
         property_text,
         maxsplit=1
     )[0]
@@ -163,11 +398,7 @@ def extract_property_type(text):
     return "Vastgoed"
 
 
-# ============================================================
-# IMMO DRIE ADVERTENTIES VINDEN
-# ============================================================
-
-def find_properties(html):
+def find_immo_drie_properties(html):
 
     soup = BeautifulSoup(
         html,
@@ -189,22 +420,10 @@ def find_properties(html):
         if not href:
             continue
 
-        if (
-            "immodrie.be" not in href
-            and not href.startswith("/")
-        ):
-            continue
-
-        if href.startswith("/"):
-
-            url = (
-                "https://www.immodrie.be"
-                + href
-            )
-
-        else:
-
-            url = href
+        url = absolute_url(
+            "https://www.immodrie.be",
+            href
+        )
 
         if "-te-koop-in-" not in url:
             continue
@@ -229,52 +448,24 @@ def find_properties(html):
 
         property_id = id_matches[-1]
 
-        city = extract_city(text)
-
-        if not city:
+        if not is_arendonk(
+            text,
+            url
+        ):
             continue
-
-        if city.lower() != "arendonk":
-            continue
-
-        status = "Onbekend"
 
         if re.search(
-            r"\bNieuw\b",
-            text,
-            re.IGNORECASE
-        ):
-
-            status = "Nieuw"
-
-        elif re.search(
-            r"\bTe koop\b",
-            text,
-            re.IGNORECASE
-        ):
-
-            status = "Te koop"
-
-        elif re.search(
             r"\bIn optie\b",
             text,
             re.IGNORECASE
         ):
+            continue
 
-            status = "In optie"
-
-        elif re.search(
+        if re.search(
             r"\bVerkocht\b",
             text,
             re.IGNORECASE
         ):
-
-            status = "Verkocht"
-
-        if status not in [
-            "Nieuw",
-            "Te koop"
-        ]:
             continue
 
         property_data = {
@@ -283,11 +474,11 @@ def find_properties(html):
 
             "source": "Immo Drie",
 
-            "type": extract_property_type(
+            "type": extract_immo_drie_type(
                 text
             ),
 
-            "city": city,
+            "city": "Arendonk",
 
             "price": extract_price(
                 text
@@ -297,48 +488,857 @@ def find_properties(html):
                 text
             ),
 
-            "living_area": extract_area(
+            "living_area": extract_area_by_label(
                 text,
-                "Leefruimte"
+                [
+                    "Leefruimte"
+                ]
             ),
 
-            "ground_area": extract_area(
+            "ground_area": extract_area_by_label(
                 text,
-                "Titles.surface_ground"
+                [
+                    "Titles.surface_ground"
+                ]
             ),
 
-            "status": status,
+            "status": "Te koop",
 
-            "url": url
+            "url": url,
         }
 
         properties.append(
             property_data
         )
 
-    unique_properties = {}
+    unique = {}
 
     for property_data in properties:
 
-        unique_properties[
+        unique[
             property_data["id"]
         ] = property_data
 
     return list(
-        unique_properties.values()
+        unique.values()
     )
 
 
+def scan_immo_drie():
+
+    print(
+        "Immo Drie controleren..."
+    )
+
+    all_properties = []
+
+    for page in range(
+        1,
+        21
+    ):
+
+        if page == 1:
+
+            url = IMMO_DRIE_URL
+
+        else:
+
+            url = (
+                f"{IMMO_DRIE_URL}"
+                f"/pagina-{page}"
+            )
+
+        print(
+            f"Pagina {page} controleren..."
+        )
+
+        html = get_page(
+            url
+        )
+
+        if not html:
+
+            break
+
+        properties = (
+            find_immo_drie_properties(
+                html
+            )
+        )
+
+        print(
+            f"  {len(properties)} "
+            "vastgoedadvertenties gevonden."
+        )
+
+        if not properties:
+
+            break
+
+        all_properties.extend(
+            properties
+        )
+
+    unique = {}
+
+    for property_data in all_properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    result = list(
+        unique.values()
+    )
+
+    print(
+        f"TOTAAL Immo Drie: "
+        f"{len(result)} unieke advertenties."
+    )
+
+    return result
+
+
 # ============================================================
-# DATABASE LADEN
+# DOMESTIC
 # ============================================================
 
-def load_seen():
+def find_domestic_properties(html):
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    category_paths = [
+        "/woningen/",
+        "/appartement/",
+        "/gronden/",
+        "/garages/",
+        "/commercieel/",
+        "/bedrijfsvastgoed/",
+    ]
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        url = absolute_url(
+            "https://www.domestic.be",
+            href
+        )
+
+        if "/nl/" not in url:
+            continue
+
+        if "te-koop" not in url.lower():
+            continue
+
+        if any(
+            path in url.lower()
+            for path in category_paths
+        ):
+            continue
+
+        if url.rstrip(
+            "/"
+        ).lower().endswith(
+            "arendonk-2370"
+        ):
+            continue
+
+        id_matches = re.findall(
+            r"(\d{5,})",
+            url
+        )
+
+        if not id_matches:
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        if not is_arendonk(
+            text,
+            url
+        ):
+            continue
+
+        property_id = (
+            "domestic-"
+            + id_matches[-1]
+        )
+
+        property_data = (
+            extract_generic_property_data(
+                "Domestic",
+                property_id,
+                text,
+                url
+            )
+        )
+
+        properties.append(
+            property_data
+        )
+
+    unique = {}
+
+    for property_data in properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique.values()
+    )
+
+
+def scan_domestic():
+
+    print(
+        "Domestic controleren..."
+    )
+
+    html = get_page(
+        DOMESTIC_URL,
+        timeout=60,
+        attempts=3
+    )
+
+    if not html:
+
+        print(
+            "  Domestic is momenteel "
+            "niet bereikbaar."
+        )
+
+        return []
+
+    properties = (
+        find_domestic_properties(
+            html
+        )
+    )
+
+    print(
+        f"  {len(properties)} "
+        "vastgoedadvertenties gevonden."
+    )
+
+    return properties
+
+
+# ============================================================
+# HEYLEN VASTGOED
+# ============================================================
+
+def find_heylen_properties(html):
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        url = absolute_url(
+            "https://www.heylenvastgoed.be",
+            href
+        )
+
+        if "/kopen/" not in url.lower():
+            continue
+
+        if url.rstrip(
+            "/"
+        ).lower().endswith(
+            "/kopen/arendonk"
+        ):
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        if not is_arendonk(
+            text,
+            url
+        ):
+            continue
+
+        if not is_for_sale(text):
+            continue
+
+        if "€" not in text:
+            continue
+
+        property_id = make_hash_id(
+            "heylen",
+            url
+        )
+
+        properties.append(
+            extract_generic_property_data(
+                "Heylen Vastgoed",
+                property_id,
+                text,
+                url
+            )
+        )
+
+    unique = {}
+
+    for property_data in properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique.values()
+    )
+
+
+def scan_heylen():
+
+    print(
+        "Heylen Vastgoed controleren..."
+    )
+
+    html = get_page(
+        HEYLEN_URL
+    )
+
+    if not html:
+
+        print(
+            "  Heylen overgeslagen."
+        )
+
+        return []
+
+    properties = (
+        find_heylen_properties(
+            html
+        )
+    )
+
+    print(
+        f"  {len(properties)} "
+        "vastgoedadvertenties gevonden."
+    )
+
+    return properties
+
+
+# ============================================================
+# HILLEWAERE
+# ============================================================
+
+def find_hillewaere_properties(html):
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        url = absolute_url(
+            "https://www.hillewaere-vastgoed.be",
+            href
+        )
+
+        if "/vastgoed/" not in url.lower():
+            continue
+
+        id_match = re.search(
+            r"/vastgoed/(\d+)(?:/|$)",
+            url
+        )
+
+        if not id_match:
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        if not is_arendonk(
+            text,
+            url
+        ):
+            continue
+
+        if not is_for_sale(text):
+            continue
+
+        property_id = (
+            "hillewaere-"
+            + id_match.group(1)
+        )
+
+        properties.append(
+            extract_generic_property_data(
+                "Hillewaere",
+                property_id,
+                text,
+                url
+            )
+        )
+
+    unique = {}
+
+    for property_data in properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique.values()
+    )
+
+
+def scan_hillewaere():
+
+    print(
+        "Hillewaere controleren..."
+    )
+
+    html = get_page(
+        HILLEWAERE_URL
+    )
+
+    if not html:
+
+        print(
+            "  Hillewaere overgeslagen."
+        )
+
+        return []
+
+    properties = (
+        find_hillewaere_properties(
+            html
+        )
+    )
+
+    print(
+        f"  {len(properties)} "
+        "vastgoedadvertenties gevonden."
+    )
+
+    return properties
+
+
+# ============================================================
+# CENTURY 21
+# ============================================================
+
+def find_century21_properties(html):
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        url = absolute_url(
+            "https://www.century21.be",
+            href
+        )
+
+        if "/nl/pand/te-koop/" not in (
+            url.lower()
+        ):
+            continue
+
+        if "/arendonk/" not in (
+            url.lower()
+        ):
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        if not is_arendonk(
+            text,
+            url
+        ):
+            continue
+
+        if not is_for_sale(text):
+            continue
+
+        property_id_match = re.search(
+            r"/arendonk/([^/?#]+)",
+            url,
+            re.IGNORECASE
+        )
+
+        if property_id_match:
+
+            property_id = (
+                "century21-"
+                + property_id_match.group(1)
+            )
+
+        else:
+
+            property_id = make_hash_id(
+                "century21",
+                url
+            )
+
+        properties.append(
+            extract_generic_property_data(
+                "Century 21",
+                property_id,
+                text,
+                url
+            )
+        )
+
+    unique = {}
+
+    for property_data in properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique.values()
+    )
+
+
+def scan_century21():
+
+    print(
+        "Century 21 controleren..."
+    )
+
+    all_properties = []
+
+    for url in CENTURY21_URLS:
+
+        html = get_page(
+            url
+        )
+
+        if not html:
+            continue
+
+        properties = (
+            find_century21_properties(
+                html
+            )
+        )
+
+        all_properties.extend(
+            properties
+        )
+
+    unique = {}
+
+    for property_data in all_properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    result = list(
+        unique.values()
+    )
+
+    print(
+        f"  {len(result)} "
+        "vastgoedadvertenties gevonden."
+    )
+
+    return result
+
+
+# ============================================================
+# DEWAELE
+# ============================================================
+
+def find_dewaele_properties(html):
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    category_paths = [
+        "/nl/te-koop/2370-arendonk",
+        "/nl/te-koop/2370-arendonk/huis",
+        "/nl/te-koop/2370-arendonk/appartement",
+        "/nl/te-koop/2370-arendonk/grond",
+        "/nl/te-koop/2370-arendonk/garage",
+        "/nl/te-koop/2370-arendonk/bedrijfsvastgoed",
+        "/nl/te-koop/2370-arendonk/kantoor",
+        "/nl/te-koop/2370-arendonk/industrie",
+    ]
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        url = absolute_url(
+            "https://www.dewaele.com",
+            href
+        )
+
+        if "/nl/te-koop/" not in (
+            url.lower()
+        ):
+            continue
+
+        path = urlparse(
+            url
+        ).path.lower().rstrip("/")
+
+        if path in category_paths:
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        if not is_arendonk(
+            text,
+            url
+        ):
+            continue
+
+        if not is_for_sale(text):
+            continue
+
+        if "€" not in text:
+            continue
+
+        property_id = make_hash_id(
+            "dewaele",
+            url
+        )
+
+        properties.append(
+            extract_generic_property_data(
+                "Dewaele",
+                property_id,
+                text,
+                url
+            )
+        )
+
+    unique = {}
+
+    for property_data in properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique.values()
+    )
+
+
+def scan_dewaele():
+
+    print(
+        "Dewaele controleren..."
+    )
+
+    all_properties = []
+
+    for url in DEWAELE_URLS:
+
+        html = get_page(
+            url
+        )
+
+        if not html:
+            continue
+
+        properties = (
+            find_dewaele_properties(
+                html
+            )
+        )
+
+        all_properties.extend(
+            properties
+        )
+
+    unique = {}
+
+    for property_data in all_properties:
+
+        unique[
+            property_data["id"]
+        ] = property_data
+
+    result = list(
+        unique.values()
+    )
+
+    print(
+        f"  {len(result)} "
+        "vastgoedadvertenties gevonden."
+    )
+
+    return result
+
+
+# ============================================================
+# IMMOWEB EN ZIMMO
+#
+# BEWUST NIET GEBRUIKT.
+# ============================================================
+
+def scan_immoweb():
+
+    print(
+        "Immoweb: uitgeschakeld."
+    )
+
+    return []
+
+
+def scan_zimmo():
+
+    print(
+        "Zimmo: uitgeschakeld."
+    )
+
+    return []
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def load_state():
 
     if not os.path.exists(
         SEEN_FILE
     ):
-        return set()
+
+        return set(), set()
 
     try:
 
@@ -350,18 +1350,100 @@ def load_seen():
 
             data = json.load(file)
 
-        return set(data)
+        # ----------------------------------------------------
+        # OUDE DATABASE
+        # ----------------------------------------------------
 
-    except Exception:
+        if isinstance(
+            data,
+            list
+        ):
 
-        return set()
+            seen = set(
+                data
+            )
+
+            initialized_sources = set()
+
+            if any(
+                str(item).startswith(
+                    "domestic-"
+                )
+                for item in seen
+            ):
+
+                initialized_sources.add(
+                    "Domestic"
+                )
+
+            if any(
+                str(item).isdigit()
+                for item in seen
+            ):
+
+                initialized_sources.add(
+                    "Immo Drie"
+                )
+
+            return (
+                seen,
+                initialized_sources
+            )
+
+        # ----------------------------------------------------
+        # NIEUWE DATABASE
+        # ----------------------------------------------------
+
+        if isinstance(
+            data,
+            dict
+        ):
+
+            seen = set(
+                data.get(
+                    "seen",
+                    []
+                )
+            )
+
+            initialized_sources = set(
+                data.get(
+                    "initialized_sources",
+                    []
+                )
+            )
+
+            return (
+                seen,
+                initialized_sources
+            )
+
+    except Exception as error:
+
+        print(
+            "Database kon niet gelezen worden:"
+        )
+
+        print(error)
+
+    return set(), set()
 
 
-# ============================================================
-# DATABASE OPSLAAN
-# ============================================================
+def save_state(
+    seen,
+    initialized_sources
+):
 
-def save_seen(seen):
+    data = {
+
+        "seen": sorted(
+            list(seen)
+        ),
+
+        "initialized_sources": sorted(
+            list(initialized_sources)
+        )
+    }
 
     with open(
         SEEN_FILE,
@@ -370,7 +1452,7 @@ def save_seen(seen):
     ) as file:
 
         json.dump(
-            sorted(list(seen)),
+            data,
             file,
             indent=2,
             ensure_ascii=False
@@ -378,92 +1460,154 @@ def save_seen(seen):
 
 
 # ============================================================
-# TELEGRAM MELDING
+# TECHNISCHE DUBBELS BINNEN ÉÉN BRON
 # ============================================================
 
-def send_telegram(property_data):
+def deduplicate_current_scan(
+    properties
+):
 
-    message_lines = []
+    unique = {}
 
-    message_lines.append(
-        "🚨 NIEUW VASTGOED"
+    for property_data in properties:
+
+        key = (
+            property_data.get(
+                "source"
+            ),
+            property_data.get(
+                "id"
+            )
+        )
+
+        unique[key] = property_data
+
+    return list(
+        unique.values()
     )
 
-    message_lines.append("")
 
-    property_type = property_data.get(
-        "type"
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def send_telegram(
+    property_data
+):
+
+    if not TELEGRAM_BOT_TOKEN:
+
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN ontbreekt."
+        )
+
+    if not TELEGRAM_CHAT_ID:
+
+        raise RuntimeError(
+            "TELEGRAM_CHAT_ID ontbreekt."
+        )
+
+    message_lines = [
+        "🚨 NIEUW VASTGOED",
+        ""
+    ]
+
+    property_type = (
+        property_data.get(
+            "type"
+        )
     )
 
     if property_type:
+
         message_lines.append(
             f"🏠 {property_type}"
         )
 
-    city = property_data.get(
-        "city"
+    city = (
+        property_data.get(
+            "city"
+        )
     )
 
     if city:
+
         message_lines.append(
             f"📍 {city}"
         )
 
-    message_lines.append("")
-
-    price = property_data.get(
-        "price"
+    price = (
+        property_data.get(
+            "price"
+        )
     )
 
     if price:
+
         message_lines.append(
             f"💰 {price}"
         )
 
-    bedrooms = property_data.get(
-        "bedrooms"
+    bedrooms = (
+        property_data.get(
+            "bedrooms"
+        )
     )
 
     if bedrooms is not None:
+
         message_lines.append(
             f"🛏️ {bedrooms} slaapkamers"
         )
 
-    living_area = property_data.get(
-        "living_area"
+    living_area = (
+        property_data.get(
+            "living_area"
+        )
     )
 
     if living_area:
+
         message_lines.append(
             f"📐 {living_area} m² leefruimte"
         )
 
-    ground_area = property_data.get(
-        "ground_area"
+    ground_area = (
+        property_data.get(
+            "ground_area"
+        )
     )
 
     if ground_area:
+
         message_lines.append(
             f"🌳 {ground_area} m² grond"
         )
 
     message_lines.append("")
 
-    source = property_data.get(
-        "source"
+    source = (
+        property_data.get(
+            "source"
+        )
     )
 
     if source:
+
         message_lines.append(
             f"🏢 {source}"
         )
 
-    url = property_data.get(
-        "url"
+    url = (
+        property_data.get(
+            "url"
+        )
     )
 
     if url:
+
         message_lines.append("")
+
         message_lines.append(
             f"🔗 {url}"
         )
@@ -497,378 +1641,97 @@ def send_telegram(property_data):
 
 
 # ============================================================
-# IMMO DRIE SCANNEN
+# ADVERTENTIES VERWERKEN
 # ============================================================
 
-def scan_immo_drie():
+def process_properties(
+    properties
+):
 
-    print(
-        "Immo Drie controleren..."
+    seen, initialized_sources = (
+        load_state()
     )
-
-    all_properties = []
-
-    for page in range(1, 21):
-
-        try:
-
-            html = get_immo_drie_page(
-                page
-            )
-
-            properties = find_properties(
-                html
-            )
-
-            print(
-                f"  {len(properties)} "
-                "vastgoedadvertenties gevonden."
-            )
-
-            if not properties:
-
-                print(
-                    "Geen vastgoed meer gevonden."
-                )
-
-                break
-
-            all_properties.extend(
-                properties
-            )
-
-        except requests.RequestException as error:
-
-            print(
-                f"Fout bij pagina {page}: "
-                f"{error}"
-            )
-
-            break
-
-    unique_properties = {}
-
-    for property_data in all_properties:
-
-        unique_properties[
-            property_data["id"]
-        ] = property_data
-
-    result = list(
-        unique_properties.values()
-    )
-
-    print(
-        "TOTAAL: "
-        f"{len(result)} unieke "
-        "vastgoedadvertenties gevonden."
-    )
-
-    return result
-
-
-# ============================================================
-# DOMESTIC PAGINA OPHALEN
-# ============================================================
-
-def get_domestic_page():
-
-    print(
-        "Domestic controleren..."
-    )
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/139.0 Safari/537.36"
-        )
-    }
-
-    max_attempts = 3
-
-    for attempt in range(
-        1,
-        max_attempts + 1
-    ):
-
-        try:
-
-            print(
-                f"  Poging {attempt}/{max_attempts}..."
-            )
-
-            response = requests.get(
-                DOMESTIC_URL,
-                headers=headers,
-                timeout=60
-            )
-
-            response.raise_for_status()
-
-            print(
-                "  Domestic succesvol bereikbaar."
-            )
-
-            return response.text
-
-        except requests.RequestException as error:
-
-            print(
-                f"  Domestic poging {attempt} "
-                f"mislukt: {error}"
-            )
-
-            if attempt < max_attempts:
-
-                print(
-                    "  Opnieuw proberen..."
-                )
-
-                time.sleep(5)
-
-            else:
-
-                print(
-                    "  Domestic is momenteel "
-                    "niet bereikbaar."
-                )
-
-    return None
-
-
-# ============================================================
-# DOMESTIC ADVERTENTIES VINDEN
-# ============================================================
-
-def find_domestic_properties(html):
-
-    if not html:
-        return []
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-    properties = []
-
-    for link in soup.find_all(
-        "a",
-        href=True
-    ):
-
-        href = link.get(
-            "href",
-            ""
-        ).strip()
-
-        if not href:
-            continue
-
-        if href.startswith("/"):
-
-            url = (
-                "https://www.domestic.be"
-                + href
-            )
-
-        elif "domestic.be" in href:
-
-            url = href
-
-        else:
-
-            continue
-
-        if (
-            "/nl/" not in url
-            or "te-koop" not in url.lower()
-        ):
-            continue
-
-        category_paths = [
-            "/woningen/",
-            "/appartement/",
-            "/gronden/",
-            "/garages/",
-            "/commercieel/"
-        ]
-
-        if any(
-            path in url.lower()
-            for path in category_paths
-        ):
-            continue
-
-        id_matches = re.findall(
-            r"(\d{5,})",
-            url
-        )
-
-        if not id_matches:
-            continue
-
-        property_id = (
-            "domestic-"
-            + id_matches[-1]
-        )
-
-        if url.rstrip("/").lower().endswith(
-            "arendonk-2370"
-        ):
-            continue
-
-        text = clean_text(
-            link.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        if not text:
-            continue
-
-        if (
-            "arendonk" not in text.lower()
-            and "arendonk" not in url.lower()
-        ):
-            continue
-
-        property_data = {
-
-            "id": property_id,
-
-            "source": "Domestic",
-
-            "type": "Vastgoed",
-
-            "city": "Arendonk",
-
-            "price": extract_price(
-                text
-            ),
-
-            "bedrooms": extract_bedrooms(
-                text
-            ),
-
-            "living_area": extract_area(
-                text,
-                "Leefruimte"
-            ),
-
-            "ground_area": extract_area(
-                text,
-                "Grondoppervlakte"
-            ),
-
-            "status": "Te koop",
-
-            "url": url
-        }
-
-        properties.append(
-            property_data
-        )
-
-    unique_properties = {}
-
-    for property_data in properties:
-
-        unique_properties[
-            property_data["id"]
-        ] = property_data
-
-    return list(
-        unique_properties.values()
-    )
-
-
-# ============================================================
-# DOMESTIC SCANNEN
-# ============================================================
-
-def scan_domestic():
-
-    try:
-
-        html = get_domestic_page()
-
-        if not html:
-
-            print(
-                "  Domestic overgeslagen."
-            )
-
-            return []
-
-        properties = find_domestic_properties(
-            html
-        )
-
-        print(
-            f"  {len(properties)} "
-            "vastgoedadvertenties gevonden."
-        )
-
-        return properties
-
-    except Exception as error:
-
-        print(
-            f"Fout bij Domestic: {error}"
-        )
-
-        return []
-
-
-# ============================================================
-# NIEUWE ADVERTENTIES VERWERKEN
-# ============================================================
-
-def process_properties(properties):
-
-    seen = load_seen()
 
     print(
         f"{len(seen)} advertenties "
         "reeds gekend."
     )
 
-    if not seen:
+    properties = (
+        deduplicate_current_scan(
+            properties
+        )
+    )
 
-        print(
-            "Database is leeg."
+    # --------------------------------------------------------
+    # GROEPEREN PER MAKELAAR
+    # --------------------------------------------------------
+
+    by_source = {}
+
+    for property_data in properties:
+
+        source = property_data[
+            "source"
+        ]
+
+        by_source.setdefault(
+            source,
+            []
+        ).append(
+            property_data
         )
 
-        print(
-            "Bestaand aanbod wordt "
-            "opgeslagen zonder "
-            "Telegrammeldingen."
-        )
+    # --------------------------------------------------------
+    # NIEUWE MAKELAARS
+    #
+    # Bestaand aanbod wordt éénmalig stil
+    # in de database opgenomen.
+    # --------------------------------------------------------
 
-        for property_data in properties:
+    for source, source_properties in (
+        by_source.items()
+    ):
 
-            seen.add(
-                property_data["id"]
+        if source not in (
+            initialized_sources
+        ):
+
+            print(
+                f"{source}: eerste scan."
             )
 
-        save_seen(seen)
+            print(
+                "  Bestaand aanbod wordt "
+                "stil als basis opgeslagen."
+            )
 
-        print(
-            f"{len(properties)} advertenties "
-            "aan database toegevoegd."
-        )
+            for property_data in (
+                source_properties
+            ):
 
-        return
+                seen.add(
+                    property_data[
+                        "id"
+                    ]
+                )
+
+            initialized_sources.add(
+                source
+            )
+
+    # --------------------------------------------------------
+    # NIEUWE ADVERTENTIES
+    # --------------------------------------------------------
 
     new_properties = []
 
     for property_data in properties:
 
         property_id = (
-            property_data["id"]
+            property_data[
+                "id"
+            ]
         )
 
         if property_id not in seen:
@@ -882,7 +1745,13 @@ def process_properties(properties):
         "advertenties gevonden."
     )
 
-    for property_data in new_properties:
+    # --------------------------------------------------------
+    # MELDINGEN
+    # --------------------------------------------------------
+
+    for property_data in (
+        new_properties
+    ):
 
         try:
 
@@ -891,18 +1760,33 @@ def process_properties(properties):
             )
 
             seen.add(
-                property_data["id"]
+                property_data[
+                    "id"
+                ]
             )
 
-            save_seen(seen)
+            save_state(
+                seen,
+                initialized_sources
+            )
 
         except Exception as error:
 
             print(
                 "Fout bij Telegrammelding "
-                f"voor {property_data['id']}: "
+                f"voor "
+                f"{property_data['id']}: "
                 f"{error}"
             )
+
+    # --------------------------------------------------------
+    # DATABASE OPSLAAN
+    # --------------------------------------------------------
+
+    save_state(
+        seen,
+        initialized_sources
+    )
 
 
 # ============================================================
@@ -912,22 +1796,30 @@ def process_properties(properties):
 def main():
 
     print()
+
     print(
         "===================================="
     )
+
     print(
         "Vastgoed scanner gestart!"
     )
+
     print(
         "===================================="
     )
+
     print()
+
+    all_properties = []
 
     # --------------------------------------------------------
     # IMMO DRIE
     # --------------------------------------------------------
 
-    immo_drie_properties = scan_immo_drie()
+    all_properties.extend(
+        scan_immo_drie()
+    )
 
     print()
 
@@ -935,18 +1827,72 @@ def main():
     # DOMESTIC
     # --------------------------------------------------------
 
-    domestic_properties = scan_domestic()
+    all_properties.extend(
+        scan_domestic()
+    )
 
     print()
 
     # --------------------------------------------------------
-    # ALLES SAMENVOEGEN
+    # HEYLEN VASTGOED
     # --------------------------------------------------------
 
-    all_properties = (
-        immo_drie_properties
-        + domestic_properties
+    all_properties.extend(
+        scan_heylen()
     )
+
+    print()
+
+    # --------------------------------------------------------
+    # HILLEWAERE
+    # --------------------------------------------------------
+
+    all_properties.extend(
+        scan_hillewaere()
+    )
+
+    print()
+
+    # --------------------------------------------------------
+    # CENTURY 21
+    # --------------------------------------------------------
+
+    all_properties.extend(
+        scan_century21()
+    )
+
+    print()
+
+    # --------------------------------------------------------
+    # DEWAELE
+    # --------------------------------------------------------
+
+    all_properties.extend(
+        scan_dewaele()
+    )
+
+    print()
+
+    # --------------------------------------------------------
+    # IMMOWEB / ZIMMO
+    # --------------------------------------------------------
+
+    scan_immoweb()
+
+    scan_zimmo()
+
+    print()
+
+    # --------------------------------------------------------
+    # RESULTAAT
+    # --------------------------------------------------------
+
+    print(
+        f"{len(all_properties)} "
+        "advertenties totaal verzameld."
+    )
+
+    print()
 
     # --------------------------------------------------------
     # NIEUWE ADVERTENTIES VERWERKEN
@@ -957,11 +1903,14 @@ def main():
     )
 
     print()
+
     print(
         "Scanner klaar."
     )
+
     print()
 
 
 if __name__ == "__main__":
+
     main()
