@@ -590,6 +590,186 @@ def process_properties(properties):
 # START
 # ============================================================
 
+# ============================================================
+# DOMESTIC PAGINA OPHALEN
+# ============================================================
+
+DOMESTIC_URL = "https://www.domestic.be/nl/te-koop/arendonk-2370"
+
+
+def get_domestic_page():
+    """
+    Haalt het actuele aanbod in Arendonk op bij Domestic.
+    """
+
+    print("Domestic controleren...")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/139.0 Safari/537.36"
+        )
+    }
+
+    response = requests.get(
+        DOMESTIC_URL,
+        headers=headers,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    return response.text
+
+
+# ============================================================
+# DOMESTIC ADVERTENTIES VINDEN
+# ============================================================
+
+def find_domestic_properties(html):
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    properties = []
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        ).strip()
+
+        if not href:
+            continue
+
+        # Alleen Domestic-links
+        if href.startswith("/"):
+            url = (
+                "https://www.domestic.be"
+                + href
+            )
+        elif "domestic.be" in href:
+            url = href
+        else:
+            continue
+
+        # We zoeken alleen vastgoed-detailpagina's
+        if (
+            "/nl/" not in url
+            or "te-koop" not in url.lower()
+        ):
+            continue
+
+        text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not text:
+            continue
+
+        # Unieke ID uit de URL halen
+        id_matches = re.findall(
+            r"(\d{5,})",
+            url
+        )
+
+        if id_matches:
+
+            property_id = (
+                "domestic-"
+                + id_matches[-1]
+            )
+
+        else:
+
+            # Als er geen numerieke ID in de URL staat,
+            # gebruiken we de URL als unieke sleutel.
+            property_id = (
+                "domestic-"
+                + url
+            )
+
+        # Alleen Arendonk
+        if "arendonk" not in text.lower():
+            if "arendonk" not in url.lower():
+                continue
+
+        property_data = {
+            "id": property_id,
+            "source": "Domestic",
+            "type": "Vastgoed",
+            "city": "Arendonk",
+            "price": extract_price(text),
+            "bedrooms": extract_bedrooms(text),
+            "living_area": extract_area(
+                text,
+                "Leefruimte"
+            ),
+            "ground_area": extract_area(
+                text,
+                "Grondoppervlakte"
+            ),
+            "status": "Te koop",
+            "url": url
+        }
+
+        properties.append(
+            property_data
+        )
+
+    # Dubbels verwijderen
+    unique_properties = {}
+
+    for property_data in properties:
+
+        unique_properties[
+            property_data["id"]
+        ] = property_data
+
+    return list(
+        unique_properties.values()
+    )
+
+
+# ============================================================
+# DOMESTIC SCANNEN
+# ============================================================
+
+def scan_domestic():
+
+    try:
+
+        html = get_domestic_page()
+
+        properties = find_domestic_properties(
+            html
+        )
+
+        print(
+            f"  {len(properties)} "
+            "vastgoedadvertenties gevonden."
+        )
+
+        return properties
+
+    except requests.RequestException as error:
+
+        print(
+            f"Fout bij Domestic: {error}"
+        )
+
+        return []
+
 def main():
 
     print()
